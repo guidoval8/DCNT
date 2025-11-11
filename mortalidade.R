@@ -8,30 +8,39 @@ library(tidyr)
 library(foreign)
 library(stringr)
 library(openxlsx)
-#rtabnetsp
+library(rtabnetsp)
 
 #devtools::install_github("danicat/read.dbc")
 #devtools::install_github("rfsaldanha/microdatasus")
+#devtools::install_github("joaohmorais/rtabnetsp")
 
 #Download: SIM, SINASC, SIH, CNES, SIA, SINAN-DENGUE, SINAN-CHIKUNGUNYA, SINAN-ZIKA, SINAN-MALARIA, SINAN-CHAGAS, SINAN-LEISHMANIOSE-VISCERAL, SINAN-LEISHMANIOSE-TEGUMENTAR, SINAN-LEPTOSPIROSE.
 #Pré-processamento: SIM, SINASC, SIH, CNES, SIA, SINAN-DENGUE, SINAN-CHIKUNGUNYA, SINAN-ZIKA, SINAN-MALARIA, SINAN-CHAGAS, SINAN-LEISHMANIOSE-TEGUMENTAR, SINAN-LEISHMANNIOSE-VISCERAL.
 
-#EXTRAÇÃO
+#----EXTRAÇÃO----#
 SIM <- fetch_datasus(year_start = 2024, year_end = 2024, uf = "SP", information_system = "SIM-DO")
 SIM <- process_sim(SIM)
+#----------------#
 
-#FILTRO DE IDADE
-SIM$IDADEanos <- as.numeric(SIM$IDADEanos)
-SIM_filtrado <- SIM %>%
-  filter(IDADEanos >= 30 & IDADEanos < 70)
-
-#CLASSIFICAÇÃO DE ANO
-SIM_filtrado <- SIM_filtrado %>%
-  mutate(DT0BITO = ymd(DTOBITO)) %>%
+#----PADRONIZAÇÃO----#
+#CLASSIFICAR ANO
+SIM <- SIM %>%
+  mutate(DTOBITO = ymd(DTOBITO)) %>%
   mutate(ANOOBITO = year(DTOBITO))
 
-#CLASSIFICAÇÃO DE CID (CAUSABAS)
+#PADRONIZAR CAUSA BÁSICA
+SIM_filtrado <- SIM %>%
+  mutate(
+    CAUSABAS = str_trim(toupper(as.character(CAUSABAS))),
+    CID3 = str_sub(CAUSABAS, 1,3)
+  )
+
+#CLASSIFICAÇÃO
 SIM_filtrado <- SIM_filtrado %>%
+  #Filtrar idade
+  mutate(IDADEanos = as.numeric(IDADEanos)) %>%
+  filter(IDADEanos >= 30 & IDADEanos < 70) %>%
+  #Classificação de CID (CAUSABAS)
   mutate(
     GRUPO_DCNT = case_when(
       CAUSABAS >= 'I00' & CAUSABAS <= 'I99' ~ 'Circulatorio',
@@ -73,7 +82,7 @@ SIM_filtrado <- SIM_filtrado %>%
   filter(!is.na(FAIXA_ETARIA))
 
 #AGRUPAR NÚMERO DE ÓBITOS POR ESTRATO
-#Criando o estrato por sexo e total
+#Criando o estrato por sexo e ambos os sexos
 df_obitos_sexo <- SIM_filtrado
 df_obitos_sexototal <- SIM_filtrado %>%
   mutate(SEXO = "Total")
@@ -111,7 +120,7 @@ DENOMINADOR <- pop_bruta2024 %>%
   ) %>%
     filter(!is.na(FAIXA_ETARIA))
 
-#Criando o estrato por sexo e total
+#Criando o estrato por sexo e ambos
 df_pop_sexo <- DENOMINADOR
 df_pop_sexo_total <- DENOMINADOR %>%
   mutate(SEXO = "Total")
@@ -125,19 +134,16 @@ DENOMINADOR <- DENOMINADOR %>%
     ) %>%
     ungroup()
 
-#TRANSFORMAÇÃO PARA JOIN DOS DADOS
+#TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
 DENOMINADOR <- DENOMINADOR %>%
-  
   #Converter tipos
   mutate(
     COD_MUN = as.character(COD_MUN),
     ANO = as.double(as.character(ANO)),
     SEXO = as.character(SEXO)
   ) %>%
-  
   #Filtrar mun de SP
   filter(str_starts(COD_MUN, "35")) %>%
-  
   #Traduzir SEXO
   mutate(
     SEXO = case_when(
@@ -156,14 +162,15 @@ DENOMINADOR <- DENOMINADOR %>%
   mutate(
     CODMUNRES = str_sub(CODMUNRES, start = 1L, end = 6L)
   )
-  
+
 #LINKAGE ENTRE OS DADOS
 #Chaves de junção
 chaves <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
 join <- left_join(NUMERADOR_SIM, DENOMINADOR, by = chaves) %>%
   filter(!is.na(populacao))
 
-write.xlsx(join, r"(C:\R\DCNT\taxa_mortalidade.xlsx)")
+teste <- join %>%
+  filter(is.na(populacao))
 
 #CALCULAR TAXA BRUTA (100.000)
 df_taxas <- join %>%
@@ -194,7 +201,7 @@ df_padrao <-left_join(df_taxas, pop_padrao_2010, by = "FAIXA_ETARIA")
 df_OE <- df_padrao %>%
   mutate(OE = taxa_bruta_pessoa * populacao_padrao)
 
-#Taxa padronizada final
+#----TAXA PADRONIZADA FINAL----#
 #população padrão total
 pop_padrao_total <- sum(pop_padrao_2010$populacao_padrao)
 
@@ -208,15 +215,107 @@ taxa_padronizada_mun <- df_OE %>%
     taxa_padronizada_100mil = (total_obitos_esperados / pop_padrao_total) * 100000
   )
 
-#Taxa padronizada ESTADO
-taxa_padronizada_estado <- df_OE %>%
+#----ESTADO----#
+estado_bruto <- df_taxas %>%
+  group_by(ANOOBITO, SEXO, GRUPO_DCNT, FAIXA_ETARIA) %>%
+  summarise(
+    total_obito_estado = sum(obitos, na.rm = TRUE),
+    total_pop_estado = sum(populacao, na.rm=TRUE)
+  ) %>%
+  ungroup()
+
+#Taxa específica ESTADO
+estado_taxa_especifica <- estado_bruto %>%
+  mutate(
+    taxa_especifica_estado = total_obito_estado / total_pop_estado
+  )
+
+#Juntar com pop padrão
+estado_padrao <- left_join(estado_taxa_especifica, pop_padrao_2010, by = 'FAIXA_ETARIA')
+
+#OE estado
+estado_oe <- estado_padrao %>%
+  mutate(
+    oe_estado = taxa_especifica_estado * populacao_padrao
+  )
+
+#Taxa padronizada final
+taxa_padronizada_estado <-  estado_oe %>%
   group_by(ANOOBITO, SEXO, GRUPO_DCNT) %>%
   summarise(
-    total_oe_estado = sum(OE, na.rm = TRUE)
-  ) %>%
+    total_oe_estado = sum(oe_estado, na.rm = TRUE)) %>%
   mutate(
     taxa_padronizada_estado = (total_oe_estado / pop_padrao_total) * 100000
   ) %>%
   ungroup()
 
-#teste1
+#----RRAS----#
+RRAS_RS <- read.xlsx(r"(C:\Users\x504402\Documents\DCNT\RRAS_Municipios.xlsx)")
+
+#Padronização
+RRAS_RS <- RRAS_RS %>%
+  mutate(COD_6_mun = as.character(COD_6_mun)) %>%
+  mutate(COD_6_mun = str_sub(COD_6_mun, start = 1L, end = 6L)) %>%
+  select(COD_6_mun, MUNICIPIO, RRAS_2025, COD_RS_2025, NOME_RS_2025) %>%
+  distinct(COD_6_mun, .keep_all = TRUE)
+
+RRAS_bruto <- left_join(df_taxas, RRAS_RS, by=c("CODMUNRES" = "COD_6_mun"))
+
+RRAS_bruto <- RRAS_bruto %>%
+  filter(!is.na(RRAS_2025)) %>%
+  group_by(RRAS_2025, ANOOBITO, SEXO, GRUPO_DCNT, FAIXA_ETARIA) %>%
+  summarise(obito_rras = sum(obitos, na.rm = TRUE),
+            populacao_rras = sum(populacao, na.rm=TRUE)) %>%
+  ungroup()
+
+#Taxa específica RRAS
+RRAS_taxa_especifica <- RRAS_bruto %>%
+  mutate(
+    taxa_especifica_rras = obito_rras / populacao_rras
+  )
+
+#Juntar com população padrão
+RRAS_padrao <- left_join(RRAS_taxa_especifica, pop_padrao_2010, by="FAIXA_ETARIA")
+
+#OE RRAS
+RRAS_oe <- RRAS_padrao %>%
+  mutate(oe_rras = taxa_especifica_rras * populacao_padrao)
+
+#Taxa padronizada final RRAS
+taxa_padronizada_rras <- RRAS_oe %>%
+  group_by(RRAS_2025, ANOOBITO, SEXO, GRUPO_DCNT) %>%
+  summarise(total_oe_rras = sum(oe_rras, na.rm = TRUE)) %>%
+  mutate(taxa_padronizada_rras = (total_oe_rras / pop_padrao_total) * 100000) %>%
+  ungroup()
+
+#----RS----#
+RRAS_RS <- left_join(df_taxas, RRAS_RS, by=c("CODMUNRES" = "COD_6_mun"))
+
+RS_bruto <- RRAS_RS %>%
+  filter(!is.na(NOME_RS_2025)) %>%
+  group_by(NOME_RS_2025, ANOOBITO, SEXO, GRUPO_DCNT, FAIXA_ETARIA) %>%
+  summarise(obito_rs = sum(obitos, na.rm = TRUE),
+            populacao_rs = sum(populacao, na.rm=TRUE)) %>%
+  ungroup()
+
+#Taxa específica RRAS
+RS_taxa_especifica <- RS_bruto %>%
+  mutate(
+    taxa_especifica_rs = obito_rs / populacao_rs
+  )
+
+#Juntar com população padrão
+RS_padrao <- left_join(RS_taxa_especifica, pop_padrao_2010, by="FAIXA_ETARIA")
+
+#OE RRAS
+RS_oe <- RS_padrao %>%
+  mutate(oe_rs = taxa_especifica_rs * populacao_padrao)
+
+#Taxa padronizada final RRAS
+taxa_padronizada_rs <- RS_oe %>%
+  group_by(NOME_RS_2025, ANOOBITO, SEXO, GRUPO_DCNT) %>%
+  summarise(total_oe_rs = sum(oe_rs, na.rm = TRUE)) %>%
+  mutate(taxa_padronizada_rs = (total_oe_rs / pop_padrao_total) * 100000) %>%
+  ungroup()
+
+
