@@ -218,3 +218,5 @@ taxa_padronizada_estado <- df_OE %>%
     taxa_padronizada_estado = (total_oe_estado / pop_padrao_total) * 100000
   ) %>%
   ungroup()
+
+#teste1
