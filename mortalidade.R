@@ -8,7 +8,6 @@ library(tidyr)
 library(foreign)
 library(stringr)
 library(openxlsx)
-library(rtabnetsp)
 
 #devtools::install_github("danicat/read.dbc")
 #devtools::install_github("rfsaldanha/microdatasus")
@@ -18,7 +17,7 @@ library(rtabnetsp)
 #Pré-processamento: SIM, SINASC, SIH, CNES, SIA, SINAN-DENGUE, SINAN-CHIKUNGUNYA, SINAN-ZIKA, SINAN-MALARIA, SINAN-CHAGAS, SINAN-LEISHMANIOSE-TEGUMENTAR, SINAN-LEISHMANNIOSE-VISCERAL.
 
 #----EXTRAÇÃO----#
-SIM <- fetch_datasus(year_start = 2024, year_end = 2024, uf = "SP", information_system = "SIM-DO")
+SIM <- fetch_datasus(year_start = 2020, year_end = 2024, uf = "SP", information_system = "SIM-DO")
 SIM <- process_sim(SIM)
 #----------------#
 
@@ -96,19 +95,59 @@ NUMERADOR_SIM <-  SIM_filtrado_final %>%
     obitos = n()
   ) %>%
   ungroup()
+#------------------------------#
 
 #----POPULAÇÃO----#
-#BUSCAR NO FTP
-url_pop_zip <- "ftp://ftp.datasus.gov.br/dissemin/publicos/IBGE/POPSVS/POPSBR24.zip"
-nome_pop_zip <- "POPSBR24.zip"
+anos_baixar <- 2015:2024
+lista_pop_bruta <- list()
 
-download.file(url = url_pop_zip, nome_pop_zip, mode = "wb")
-unzip(nome_pop_zip)
+for (ano in anos_baixar) {
+  
+  # Pega os dois últimos dígitos do ano (ex: 2022 -> "22")
+  sufixo_ano <- substr(as.character(ano), 3, 4)
+  
+  # Cria os nomes dos arquivos dinamicamente
+  url_pop_zip  <- paste0("ftp://ftp.datasus.gov.br/dissemin/publicos/IBGE/POPSVS/POPSBR", sufixo_ano, ".zip")
+  nome_pop_zip <- paste0("POPSBR", sufixo_ano, ".zip")
+  nome_dbf     <- paste0("POP", sufixo_ano, ".dbf") # O nome do arquivo DENTRO do zip
+  
+  tryCatch({
+    # Baixa o arquivo
+    print(paste("Baixando:", nome_pop_zip))
+    download.file(url = url_pop_zip, destfile = nome_pop_zip, mode = "wb", quiet = TRUE)
+    
+    # Descompacta
+    unzip(nome_pop_zip)
+    
+    # Lê o arquivo .dbf
+    print(paste("Lendo:", nome_dbf))
+    df_ano_atual <- read.dbf(nome_dbf)
+    
+    # Adiciona o dataframe lido à nossa lista
+    lista_pop_bruta[[as.character(ano)]] <- df_ano_atual
+    
+    print(paste("Ano", ano, "processado com sucesso."))
+    
+  }, error = function(e) {
+    # Se der erro (ex: arquivo não existe no FTP), ele avisa e continua
+    print(paste("ERRO ao processar o ano", ano, ":", e$message))
+  })
+}
 
-pop_bruta2024 <- read.dbf("POP24.dbf")
+pop_bruta_total <- bind_rows(lista_pop_bruta)
+
+# #BUSCAR NO FTP
+# url_pop_zip <- "ftp://ftp.datasus.gov.br/dissemin/publicos/IBGE/POPSVS/POPSBR24.zip"
+# nome_pop_zip <- "POPSBR24.zip"
+# 
+# 
+# download.file(url = url_pop_zip, nome_pop_zip, mode = "wb")
+# unzip(nome_pop_zip)
+# 
+# pop_bruta2024 <- read.dbf("POP24.dbf")
 
 #CLASSIFICAÇÃO DE FAIXA ETÁRIA
-DENOMINADOR <- pop_bruta2024 %>%
+DENOMINADOR <- pop_bruta_total %>%
   mutate(
     FAIXA_ETARIA = case_when(
       IDADE == "030" | IDADE == "035" ~ "30-39 anos",
@@ -133,6 +172,7 @@ DENOMINADOR <- DENOMINADOR %>%
       populacao = sum(POP, na.rm = TRUE)
     ) %>%
     ungroup()
+#--------------------------------#
 
 #TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
 DENOMINADOR <- DENOMINADOR %>%
@@ -172,7 +212,7 @@ join <- left_join(NUMERADOR_SIM, DENOMINADOR, by = chaves) %>%
 teste <- join %>%
   filter(is.na(populacao))
 
-#CALCULAR TAXA BRUTA (100.000)
+#---Cálculos----# 
 df_taxas <- join %>%
   mutate(
     taxa_bruta_especifica = (obitos / populacao) * 100000
@@ -201,7 +241,7 @@ df_padrao <-left_join(df_taxas, pop_padrao_2010, by = "FAIXA_ETARIA")
 df_OE <- df_padrao %>%
   mutate(OE = taxa_bruta_pessoa * populacao_padrao)
 
-#----TAXA PADRONIZADA FINAL----#
+#----TAXA PADRONIZADA MUN----#
 #população padrão total
 pop_padrao_total <- sum(pop_padrao_2010$populacao_padrao)
 
@@ -250,10 +290,10 @@ taxa_padronizada_estado <-  estado_oe %>%
   ungroup()
 
 #----RRAS----#
-RRAS_RS <- read.xlsx(r"(C:\Users\x504402\Documents\DCNT\RRAS_Municipios.xlsx)")
+RRAS_Municipios <- read.xlsx(r"(C:\Users\x504402\Documents\DCNT\RRAS_Municipios.xlsx)")
 
 #Padronização
-RRAS_RS <- RRAS_RS %>%
+RRAS_RS <- RRAS_Municipios %>%
   mutate(COD_6_mun = as.character(COD_6_mun)) %>%
   mutate(COD_6_mun = str_sub(COD_6_mun, start = 1L, end = 6L)) %>%
   select(COD_6_mun, MUNICIPIO, RRAS_2025, COD_RS_2025, NOME_RS_2025) %>%
@@ -318,4 +358,122 @@ taxa_padronizada_rs <- RS_oe %>%
   mutate(taxa_padronizada_rs = (total_oe_rs / pop_padrao_total) * 100000) %>%
   ungroup()
 
+#---------------------------------#
+
+#----TAXA BRUTA----#
+#Estado
+taxa_bruta_estado <- estado_bruto %>%
+  group_by(ANOOBITO, SEXO, GRUPO_DCNT) %>%
+  summarise(
+    total_obito_estado = sum(total_obito_estado, na.rm=TRUE),
+    total_pop_estado = sum(total_pop_estado, na.rm=TRUE)
+  ) %>%
+  mutate(
+    taxa_bruta_estado = (total_obito_estado / total_pop_estado) * 100000
+  ) %>%
+  ungroup()
+
+#RRAS
+taxa_bruta_rras <- RRAS_bruto %>%
+  group_by(RRAS_2025, ANOOBITO, SEXO, GRUPO_DCNT) %>%
+  summarise(
+    total_obito_rras = sum(obito_rras, na.rm = TRUE),
+    total_pop_rras = sum(populacao_rras, na.rm = TRUE)
+  )%>%
+  mutate(taxa_bruta_rras = (total_obito_rras / total_pop_rras) * 100000)%>%
+  ungroup()
+
+#RS
+taxa_bruta_rs <- RS_bruto %>%
+  group_by(NOME_RS_2025, ANOOBITO, SEXO, GRUPO_DCNT) %>%
+  summarise(
+    total_obito_rs = sum(obito_rs, na.rm = TRUE),
+    total_pop_rs = sum(populacao_rs, na.rm = TRUE)
+  )%>%
+  mutate(taxa_bruta_rs = (total_obito_rs / total_pop_rs) * 100000)%>%
+  ungroup()
+
+#MUN
+taxa_bruta_mun <- df_taxas %>%
+  group_by(CODMUNRES, ANOOBITO, SEXO, GRUPO_DCNT) %>%
+  summarise(
+    total_obito_mun = sum(obitos, na.rm = TRUE),
+    total_pop_mun = sum(populacao, na.rm = TRUE)
+  )%>%
+  mutate(taxa_bruta_mun = (total_obito_mun / total_pop_mun) * 100000)%>%
+  ungroup()
+#------------------------------------------#
+
+#----AGREGAR PARA BI----#
+#ESTADO
+estado_bi <- taxa_padronizada_estado %>%
+  full_join(taxa_bruta_estado, by=c('ANOOBITO', 'SEXO', 'GRUPO_DCNT'))
+#RRAS
+rras_bi <- taxa_padronizada_rras %>%
+  full_join(taxa_bruta_rras, by=c('RRAS_2025','ANOOBITO', 'SEXO', 'GRUPO_DCNT'))
+#RS
+rs_bi <- taxa_padronizada_rs %>%
+  full_join(taxa_bruta_rs, by=c('NOME_RS_2025','ANOOBITO', 'SEXO', 'GRUPO_DCNT'))
+#MUN
+mun_bi <- taxa_padronizada_mun %>%
+  full_join(taxa_bruta_mun, by=c('CODMUNRES','ANOOBITO', 'SEXO', 'GRUPO_DCNT'))
+#------------------------#
+
+#----PADRONIZAR PARA O BI----#
+geo_de_para_nomes <- RRAS_Municipios %>%
+  select(CODMUNRES = COD_6_mun, Nome_Municipio = MUNICIPIO) %>%
+  distinct(CODMUNRES, .keep_all = TRUE)
+
+#Padronizar ESTADO
+estado_bi_padronizado <- estado_bi %>%
+  transmute(
+    Nivel_Geografico = 'Estado',
+    ID_Localidade = '35',
+    Nome_Localidade = 'São Paulo (Estado)',
+    ANOOBITO, SEXO, GRUPO_DCNT,
+    Taxa_Padronizada = taxa_padronizada_estado,
+    Taxa_Bruta = taxa_bruta_estado
+  )
+
+#Padronizar RRAS
+rras_bi_padronizado <- rras_bi %>%
+  transmute(
+    Nivel_Geografico = "RRAS",
+    ID_Localidade = RRAS_2025,
+    Nome_Localidade = RRAS_2025,
+    ANOOBITO, SEXO, GRUPO_DCNT,
+    Taxa_Padronizada = taxa_padronizada_rras,
+    Taxa_Bruta = taxa_bruta_rras
+  )
+
+#Padronizar RS
+rs_bi_padronizado <- rs_bi %>%
+  transmute(
+    Nivel_Geografico = "Região de Saúde",
+    ID_Localidade = NOME_RS_2025,
+    Nome_Localidade = NOME_RS_2025,
+    ANOOBITO, SEXO, GRUPO_DCNT,
+    Taxa_Padronizada = taxa_padronizada_rs,
+    Taxa_Bruta = taxa_bruta_rs
+  )
+
+#Padronizar MUN
+mun_bi_padronizado <- mun_bi %>%
+  left_join(geo_de_para_nomes, by = "CODMUNRES")%>%
+  transmute(
+    Nivel_Geografico = "Município",
+    ID_Localidade = CODMUNRES,
+    Nome_Localidade = Nome_Municipio,
+    ANOOBITO, SEXO, GRUPO_DCNT,
+    Taxa_Padronizada = taxa_padronizada_100mil,
+    Taxa_Bruta = taxa_bruta_mun
+  )
+
+#----EMPILHAR----#
+tabela_mestra_mortalidade <- bind_rows(
+  estado_bi_padronizado,
+  rras_bi_padronizado,
+  rs_bi_padronizado,
+  mun_bi_padronizado
+)
 
