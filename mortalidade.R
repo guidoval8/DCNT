@@ -8,6 +8,7 @@ library(tidyr)
 library(foreign)
 library(stringr)
 library(openxlsx)
+library(rio)
 
 #devtools::install_github("danicat/read.dbc")
 #devtools::install_github("rfsaldanha/microdatasus")
@@ -17,7 +18,7 @@ library(openxlsx)
 #Pré-processamento: SIM, SINASC, SIH, CNES, SIA, SINAN-DENGUE, SINAN-CHIKUNGUNYA, SINAN-ZIKA, SINAN-MALARIA, SINAN-CHAGAS, SINAN-LEISHMANIOSE-TEGUMENTAR, SINAN-LEISHMANNIOSE-VISCERAL.
 
 #----EXTRAÇÃO----#
-SIM <- fetch_datasus(year_start = 2020, year_end = 2024, uf = "SP", information_system = "SIM-DO")
+SIM <- fetch_datasus(year_start = 2015, year_end = 2024, uf = "SP", information_system = "SIM-DO")
 SIM <- process_sim(SIM)
 #----------------#
 
@@ -209,9 +210,6 @@ chaves <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
 join <- left_join(NUMERADOR_SIM, DENOMINADOR, by = chaves) %>%
   filter(!is.na(populacao))
 
-teste <- join %>%
-  filter(is.na(populacao))
-
 #---Cálculos----# 
 df_taxas <- join %>%
   mutate(
@@ -290,7 +288,7 @@ taxa_padronizada_estado <-  estado_oe %>%
   ungroup()
 
 #----RRAS----#
-RRAS_Municipios <- read.xlsx(r"(C:\Users\x504402\Documents\DCNT\RRAS_Municipios.xlsx)")
+RRAS_Municipios <- import("https://github.com/guidoval8/DCNT/blob/main/dados/RRAS_Municipios.xlsx?raw=true")
 
 #Padronização
 RRAS_RS <- RRAS_Municipios %>%
@@ -476,4 +474,26 @@ tabela_mestra_mortalidade <- bind_rows(
   rs_bi_padronizado,
   mun_bi_padronizado
 )
+
+#----REDUÇÃO 2,2% AO ANO----#
+#----juros composto----#
+#M = C(1-i)^t
+
+taxa_base_2015 <- tabela_mestra_mortalidade %>%
+  filter(ANOOBITO == 2015)
+
+mestra_base_2015 <- left_join(
+  tabela_mestra_mortalidade, 
+  taxa_base_2015, 
+  by = c("Nivel_Geografico","ID_Localidade","Nome_Localidade","SEXO","GRUPO_DCNT" )) %>%
+  select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","Taxa_Padronizada.x", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
+  rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Padronizada" = "Taxa_Padronizada.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
+
+mestra <- mestra_base_2015 %>%
+  mutate(taxa_esperada_oms = Taxa_Bruta_2015*(1-0.022)^(ANOOBITO - 2015)) %>%
+  mutate(reduc_oms = ifelse(
+    Taxa_Bruta < taxa_esperada_oms, 1, 0))
+  
+
+#write.xlsx(tabela_mestra_mortalidade, r"(C:\R\DCNT\taxa_mestre_mortalidade.xlsx)")
 
