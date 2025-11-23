@@ -57,9 +57,9 @@ SIM_todas <- SIM_filtrado %>%
   mutate(
     GRUPO_DCNT = case_when(
       (CAUSABAS >= 'I00' & CAUSABAS <= 'I99') |
-      (CAUSABAS >= 'C00' & CAUSABAS <= 'C97') |
-      (CAUSABAS >= 'E10' & CAUSABAS <= 'E14') |
-      ((CAUSABAS >= 'J30' & CAUSABAS <= 'J98') & (CAUSABAS != 'J36')) ~ "Todas_DCNT",
+        (CAUSABAS >= 'C00' & CAUSABAS <= 'C97') |
+        (CAUSABAS >= 'E10' & CAUSABAS <= 'E14') |
+        ((CAUSABAS >= 'J30' & CAUSABAS <= 'J98') & (CAUSABAS != 'J36')) ~ "Todas_DCNT",
       TRUE ~ NA_character_
     )
   ) %>%
@@ -158,7 +158,7 @@ DENOMINADOR <- pop_bruta_total %>%
       TRUE ~ NA_character_
     )
   ) %>%
-    filter(!is.na(FAIXA_ETARIA))
+  filter(!is.na(FAIXA_ETARIA))
 
 #Criando o estrato por sexo e ambos
 df_pop_sexo <- DENOMINADOR
@@ -168,11 +168,11 @@ df_pop_sexo_total <- DENOMINADOR %>%
 DENOMINADOR <- rbind(df_pop_sexo, df_pop_sexo_total)
 
 DENOMINADOR <- DENOMINADOR %>%
-    group_by(COD_MUN, ANO, SEXO, FAIXA_ETARIA) %>%
-    summarise(
-      populacao = sum(POP, na.rm = TRUE)
-    ) %>%
-    ungroup()
+  group_by(COD_MUN, ANO, SEXO, FAIXA_ETARIA) %>%
+  summarise(
+    populacao = sum(POP, na.rm = TRUE)
+  ) %>%
+  ungroup()
 #--------------------------------#
 
 #TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
@@ -223,7 +223,7 @@ df_taxas <- join %>%
 pop_padrao_2010 <- data.frame(
   FAIXA_ETARIA = c("30-39 anos", "40-49 anos", "50-59 anos", "60-69 anos"),
   populacao_padrao = c(30031077,25176600,18664323,
-                      11502710)
+                       11502710)
 )
 
 pop_padrao_2010 <- pop_padrao_2010 %>%
@@ -493,7 +493,29 @@ mestra <- mestra_base_2015 %>%
   mutate(taxa_esperada_oms = Taxa_Bruta_2015*(1-0.022)^(ANOOBITO - 2015)) %>%
   mutate(reduc_oms = ifelse(
     Taxa_Bruta < taxa_esperada_oms, 1, 0))
-  
 
-#write.xlsx(tabela_mestra_mortalidade, r"(C:\R\DCNT\taxa_mestre_mortalidade.xlsx)")
+#----DIAGRAMA DE CONTROLE----#
+#Linha 1 = Média das taxas brutas dos 10 anos
+#Linha 2 = Média + 2 desvios padrão
+#Linha 3 = Taxa bruta do ano de 2024
+
+#Média e dp
+dcontrole <- mestra %>%
+  group_by(Nivel_Geografico, ID_Localidade, Nome_Localidade, SEXO, GRUPO_DCNT) %>%
+  summarise(
+    media_taxa_bruta = mean(Taxa_Bruta, na.rm = TRUE),
+    dp_taxa_bruta = sd(Taxa_Bruta, na.rm= TRUE),
+    .groups =  "drop"
+  )
+
+dcontrole <- dcontrole %>%
+  mutate(
+    LSC = media_taxa_bruta + 2 * dp_taxa_bruta, #linha 2 limite superior de controle
+    LIC = media_taxa_bruta - 2 * dp_taxa_bruta
+  )
+
+mestra <- left_join(mestra,dcontrole,
+                    by=c("Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "SEXO", "GRUPO_DCNT"))
+
+write.xlsx(mestra, r"(C:\R\DCNT\t1.xlsx)")
 
