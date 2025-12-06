@@ -29,31 +29,41 @@ SIM <- SIM %>%
   mutate(ANOOBITO = year(DTOBITO))
 
 #PADRONIZAR CAUSA BÁSICA
-SIM_filtrado <- SIM %>%
+SIM_padrao <- SIM %>%
   mutate(
     CAUSABAS = str_trim(toupper(as.character(CAUSABAS))),
     CID3 = str_sub(CAUSABAS, 1,3)
-  )
-
-#CLASSIFICAÇÃO
-SIM_filtrado <- SIM_filtrado %>%
+  ) %>%
   #Filtrar idade
   mutate(IDADEanos = as.numeric(IDADEanos)) %>%
-  filter(IDADEanos >= 30 & IDADEanos < 70) %>%
-  #Classificação de CID (CAUSABAS)
+  filter(IDADEanos >= 30 & IDADEanos < 70)
+
+#CLASSIFICAÇÃO CAUSABAS
+SIM_grupos <- SIM_padrao %>%
+  #Classificação de CID
   mutate(
     GRUPO_DCNT = case_when(
-      CAUSABAS >= 'I00' & CAUSABAS <= 'I99' ~ 'Circulatorio',
-      CAUSABAS >= 'C00' & CAUSABAS <= 'C97' ~ 'Cancer',
-      CAUSABAS >= 'E10' & CAUSABAS <= 'E14' ~ 'Diabetes',
-      CAUSABAS >= 'J30' & CAUSABAS <= 'J98' & CAUSABAS != 'J36' ~ 'Respiratoria',
+      CID3 >= 'I00' & CID3 <= 'I99' ~ 'Circulatorio',
+      CID3 >= 'C15' & CID3 <= 'C26' ~ 'Cancer do Aparelho Digestivo',
+      CID3 >= 'C50' & CID3 <= 'C50' ~ 'Cancer de Mama',
+      CID3 >= 'C53' & CID3 <= 'C55' ~ 'Cancer de Utero',
+      CID3 >= 'E10' & CID3 <= 'E14' ~ 'Diabetes',
+      CID3 >= 'J30' & CID3 <= 'J98' & CID3 != 'J36' ~ 'Respiratoria',
       TRUE ~ NA_character_
     )
   ) %>%
   filter(!is.na(GRUPO_DCNT))
 
+SIM_cancer_todos <- SIM_padrao %>%
+  mutate(
+    GRUPO_DCNT = case_when(
+      CAUSABAS >= 'C00' & CAUSABAS <= 'C97' ~ 'Cancer'
+    ) 
+  ) %>%
+  filter(GRUPO_DCNT == 'Cancer')
+
 #Classificação que agrupa as DCNT
-SIM_todas <- SIM_filtrado %>%
+SIM_todas <- SIM_padrao %>%
   mutate(
     GRUPO_DCNT = case_when(
       (CAUSABAS >= 'I00' & CAUSABAS <= 'I99') |
@@ -66,7 +76,7 @@ SIM_todas <- SIM_filtrado %>%
   filter(!is.na(GRUPO_DCNT))
 
 #EMPILHAR AS CLASSIFICAÇÕES
-SIM_filtrado <- rbind(SIM_filtrado, SIM_todas)
+SIM_filtrado <- rbind(SIM_grupos, SIM_todas, SIM_cancer_todos)
 
 #CLASSIFICAÇÃO FAIXA ETÁRIA
 SIM_filtrado <- SIM_filtrado %>%
@@ -475,6 +485,8 @@ tabela_mestra_mortalidade <- bind_rows(
   mun_bi_padronizado
 )
 
+
+#----CÁLCULO DE METAS (CONDICIONAL)----#
 #----REDUÇÃO 2,2% AO ANO----#
 #----juros composto----#
 #M = C(1-i)^t
@@ -483,39 +495,34 @@ taxa_base_2015 <- tabela_mestra_mortalidade %>%
   filter(ANOOBITO == 2015)
 
 mestra_base_2015 <- left_join(
-  tabela_mestra_mortalidade, 
-  taxa_base_2015, 
+  tabela_mestra_mortalidade,
+  taxa_base_2015,
   by = c("Nivel_Geografico","ID_Localidade","Nome_Localidade","SEXO","GRUPO_DCNT" )) %>%
   select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","Taxa_Padronizada.x", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
   rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Padronizada" = "Taxa_Padronizada.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
 
+# Aplica a lógica condicional para a meta de redução
+# O objetivo de 10% de redução até 2030 para o Câncer de Mama é equivalente a uma 
+#redução anual composta de aproximadamente 0.7% (0.007).
+
 mestra <- mestra_base_2015 %>%
-  mutate(taxa_esperada_oms = Taxa_Bruta_2015*(1-0.022)^(ANOOBITO - 2015)) %>%
-  mutate(reduc_oms = ifelse(
-    Taxa_Bruta < taxa_esperada_oms, 1, 0))
-
-#----DIAGRAMA DE CONTROLE----#
-#Linha 1 = Média das taxas brutas dos 10 anos
-#Linha 2 = Média + 2 desvios padrão
-#Linha 3 = Taxa bruta do ano de 2024
-
-#Média e dp
-dcontrole <- mestra %>%
-  group_by(Nivel_Geografico, ID_Localidade, Nome_Localidade, SEXO, GRUPO_DCNT) %>%
-  summarise(
-    media_taxa_bruta = mean(Taxa_Bruta, na.rm = TRUE),
-    dp_taxa_bruta = sd(Taxa_Bruta, na.rm= TRUE),
-    .groups =  "drop"
-  )
-
-dcontrole <- dcontrole %>%
   mutate(
-    LSC = media_taxa_bruta + 2 * dp_taxa_bruta, #linha 2 limite superior de controle
-    LIC = media_taxa_bruta - 2 * dp_taxa_bruta
+    TAXA_ANUAL_REDUCAO = case_when(
+      GRUPO_DCNT == 'Cancer de Mama' & ANOOBITO <= 2030 ~ 0.007, #Meta de 10% até 2030
+      GRUPO_DCNT == 'Cancer de Utero' & ANOOBITO <= 2030 ~ 0.0147, #Meta de 20% até 2030
+      GRUPO_DCNT == 'Cancer do Aparelho Digestivo' & ANOOBITO <= 2030 ~ 0.007,
+      TRUE ~ 0.022 # Meta de 2.2% ao ano para os demais grupos
+    )
+  ) %>%
+  mutate(
+    taxa_esperada_meta = Taxa_Bruta_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
+  ) %>%
+  mutate(
+    reduc_meta = ifelse(Taxa_Bruta < taxa_esperada_meta, 1, 0)
+  ) %>%
+  select(
+    "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT",
+    "Taxa_Padronizada", "Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta", "reduc_meta"
   )
-
-mestra <- left_join(mestra,dcontrole,
-                    by=c("Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "SEXO", "GRUPO_DCNT"))
 
 write.xlsx(mestra, r"(C:\R\DCNT\t1.xlsx)")
-
