@@ -9,6 +9,7 @@ library(foreign)
 library(stringr)
 library(openxlsx)
 library(rio)
+library(slider)
 
 #devtools::install_github("danicat/read.dbc")
 #devtools::install_github("rfsaldanha/microdatasus")
@@ -44,9 +45,12 @@ SIM_grupos <- SIM_padrao %>%
   mutate(
     GRUPO_DCNT = case_when(
       CID3 >= 'I00' & CID3 <= 'I99' ~ 'Circulatorio',
-      CID3 >= 'C15' & CID3 <= 'C26' ~ 'Cancer do Aparelho Digestivo',
-      CID3 >= 'C50' & CID3 <= 'C50' ~ 'Cancer de Mama',
-      CID3 >= 'C53' & CID3 <= 'C55' ~ 'Cancer de Utero',
+      CID3 >= 'C15' & CID3 <= 'C25' | CAUSABAS == 'C260' | CAUSABAS == 'C268'
+      | CAUSABAS == 'C269' | CAUSABAS == 'C451' | CID3 == 'C48' | CAUSABAS == 'C772'
+      | CAUSABAS == 'C784' | CAUSABAS == 'C785' | CAUSABAS == 'C786' | CAUSABAS == 'C787'
+      | CAUSABAS == 'C788' ~ 'Cancer do Aparelho Digestivo',
+      CID3 == 'C50' ~ 'Cancer de Mama',
+      CID3 == 'C53' ~ 'Cancer de Colo de Utero', 
       CID3 >= 'E10' & CID3 <= 'E14' ~ 'Diabetes',
       CID3 >= 'J30' & CID3 <= 'J98' & CID3 != 'J36' ~ 'Respiratoria',
       TRUE ~ NA_character_
@@ -100,7 +104,7 @@ df_obitos_sexototal <- SIM_filtrado %>%
 SIM_filtrado_final <- rbind(df_obitos_sexo, df_obitos_sexototal)
 
 #Contando o número de óbitos por estrato
-NUMERADOR_SIM <-  SIM_filtrado_final %>%
+NUMERADOR_SIM <- SIM_filtrado_final %>%
   group_by(ANOOBITO, SEXO, CODMUNRES, GRUPO_DCNT, FAIXA_ETARIA) %>%
   summarise(
     obitos = n()
@@ -485,25 +489,25 @@ tabela_mestra_mortalidade <- bind_rows(
   mun_bi_padronizado
 )
 
-
-#----CÁLCULO DE METAS (CONDICIONAL)----#
+#----CÁLCULO DE METAS----#
 #----REDUÇÃO 2,2% AO ANO----#
 #----juros composto----#
 #M = C(1-i)^t
 
 taxa_base_2015 <- tabela_mestra_mortalidade %>%
-  filter(ANOOBITO == 2015)
+  filter(ANOOBITO == 2015) %>%
+  rename(Taxa_Padronizada_2015 = Taxa_Padronizada)
 
 mestra_base_2015 <- left_join(
   tabela_mestra_mortalidade,
   taxa_base_2015,
   by = c("Nivel_Geografico","ID_Localidade","Nome_Localidade","SEXO","GRUPO_DCNT" )) %>%
-  select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","Taxa_Padronizada.x", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
-  rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Padronizada" = "Taxa_Padronizada.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
+  select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","Taxa_Padronizada_2015", "Taxa_Padronizada", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
+  rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
 
 # Aplica a lógica condicional para a meta de redução
 # O objetivo de 10% de redução até 2030 para o Câncer de Mama é equivalente a uma 
-#redução anual composta de aproximadamente 0.7% (0.007).
+# redução anual composta de aproximadamente 0.7% (0.007).
 
 mestra <- mestra_base_2015 %>%
   mutate(
@@ -518,11 +522,18 @@ mestra <- mestra_base_2015 %>%
     taxa_esperada_meta = Taxa_Bruta_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
   ) %>%
   mutate(
-    reduc_meta = ifelse(Taxa_Bruta < taxa_esperada_meta, 1, 0)
+    taxa_padronizada_esperada_meta = Taxa_Padronizada_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
+  ) %>%
+  mutate(
+    reduc_meta_bruta = ifelse(Taxa_Padronizada < taxa_esperada_meta, 1, 0)
+  ) %>%
+  mutate(
+    reduc_meta_padro = ifelse(Taxa_Padronizada < taxa_esperada_meta, 1, 0)
   ) %>%
   select(
     "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT",
-    "Taxa_Padronizada", "Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta", "reduc_meta"
+    "Taxa_Padronizada", "Taxa_Padronizada_2015","taxa_padronizada_esperada_meta","Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta", "reduc_meta_bruta", "reduc_meta_padro"
   )
 
-write.xlsx(mestra, r"(C:\R\DCNT\t1.xlsx)")
+write.csv2(mestra, r"(C:\R\DCNT\t1.csv)", na = "", row.names = FALSE)
+
