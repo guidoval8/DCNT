@@ -10,7 +10,10 @@ library(stringr)
 library(openxlsx)
 library(rio)
 library(slider)
+library(sf)
+library(ggplot2)
 
+options(download.file.method = "wininet")
 #devtools::install_github("danicat/read.dbc")
 #devtools::install_github("rfsaldanha/microdatasus")
 #devtools::install_github("joaohmorais/rtabnetsp")
@@ -535,4 +538,91 @@ mestra <- mestra_base_2015 %>%
   )
 
 write.csv2(mestra, r"(C:\R\DCNT\t1.csv)", na = "", row.names = FALSE)
+
+#--------------------------------------------------------#
+#-----------------MORTALIDADE TRÂNSITO-------------------#
+#--------------------------------------------------------#
+
+#Shape de municípios
+mun_shp <- read_sf(r'(C:\R\DCNT\mun_shp.gpkg)')
+
+#CLASSIFICAÇÃO CAUSABAS
+SIM_transito_grupos <- SIM_padrao %>%
+  #Classificação de CID
+  mutate(
+    GRUPO_transito = case_when(
+      CID3 >= 'V01' & CID3 <= 'V09' ~ 'Pedestre',
+      CID3 >= 'V10' & CID3 <= 'V19' ~ 'Ciclista',
+      CID3 >= 'V20' & CID3 <= 'V39' ~ 'Moto',
+      CID3 >= 'V40' & CID3 <= 'V79' ~ 'Carro',
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(GRUPO_transito))
+
+SIM_transito_todos <- SIM_padrao %>%
+  mutate(
+    GRUPO_transito = case_when(
+      (CID3 >= 'V01' & CID3 <= 'V89' ~ 'Transito_todas'),
+      TRUE ~ NA_character_
+      )
+    ) %>%
+  filter(!is.na(GRUPO_transito))
+
+#EMPILHAR AS CLASSIFICAÇÕES
+SIM_filtrado_transito <- rbind(SIM_transito_grupos, SIM_transito_todos)
+
+#CONTAGEM DE ÓBITOS
+NUMERADOR_TRANSITO <- SIM_filtrado_transito %>%
+  group_by(CODMUNOCOR, ANOOBITO, GRUPO_transito) %>%
+  summarise(obitos = n())%>%
+  ungroup() %>%
+  filter(CODMUNOCOR >= 350000 & CODMUNOCOR <= 359999) #Filtra municipio de São Paulo
+
+#UNIR COM O MAPA
+mapa_transito <- NUMERADOR_TRANSITO %>%
+  filter(ANOOBITO %in% c(2015,2024)) %>%
+  filter(GRUPO_transito == 'Transito_todas') %>%
+  group_by(CODMUNOCOR, ANOOBITO, GRUPO_transito) %>%
+  summarise(obitos = sum(obitos, na.rm = TRUE), .groups = 'drop') %>%
+  
+  #Pivot para ter ano lado a lado
+  pivot_wider(names_from = ANOOBITO,
+              names_prefix = "ano_",
+              values_from = obitos,
+              values_fill = 0) %>%
+  mutate(
+    var_pct = ((ano_2024 - ano_2015) / ano_2015) * 100
+  ) %>%
+  #caso 2015 for 0
+  mutate(var_pct = ifelse(is.infinite(var_pct), 100, var_pct))
+
+#MAPA
+mapa_transito <- mapa_transito %>%
+  mutate(categoria_var = cut(var_pct,
+                             breaks = quantile(var_pct, probs = seq(0, 1, 0.25), na.rm = TRUE),
+                             include.lowest  = TRUE,
+                             labels = c("1º Quartil (Menor variação)", "2º Quartil", "3º Quartil", "4º Quartil (Maior variação)"))
+         )
+
+#UNIR MAPA X DADOS
+mapa_transito_final <- left_join(mun_shp, mapa_transito, by = c('CD_MUN' = 'CODMUNOCOR'))
+
+#CONTORNO RS
+rs_shp <- mun_shp %>%
+  group_by(NOME_RS_2025) %>%
+  summarise(geometry = st_union(geom)) %>%
+  ungroup()
+
+#MAPA
+ggplot(data = mapa_transito_final) +
+  geom_sf(aes(fill = categoria_var), color = 'white', size = 0.0) +
+  geom_sf(data = rs_shp, fill= 'transparent', color = 'black', size = 0.6) +
+  scale_fill_brewer(palette = "RdYlGn", direction = -1, name = 'Variação %') +
+  theme_void() +
+  labs(
+    title = "Variação Percentual do Número de Óbitos por lesões de Trânsito (2024 vs 2015)",
+    subtitle = "Municípios de São Paulo com contorno das Regionais de Saúde",
+    caption = "Fonte: SIM/DATASUS"
+  )
 
