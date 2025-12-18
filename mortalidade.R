@@ -33,11 +33,13 @@ SIM <- SIM %>%
   mutate(ANOOBITO = year(DTOBITO))
 
 #PADRONIZAR CAUSA BÁSICA
-SIM_padrao <- SIM %>%
+SIM_CID <- SIM %>%
   mutate(
     CAUSABAS = str_trim(toupper(as.character(CAUSABAS))),
     CID3 = str_sub(CAUSABAS, 1,3)
-  ) %>%
+  )
+
+SIM_padrao <- SIM_CID %>%
   #Filtrar idade
   mutate(IDADEanos = as.numeric(IDADEanos)) %>%
   filter(IDADEanos >= 30 & IDADEanos < 70)
@@ -117,6 +119,7 @@ NUMERADOR_SIM <- SIM_filtrado_final %>%
 #------------------------------#
 
 #----POPULAÇÃO----#
+options(download.file.method = "libcurl")
 anos_baixar <- 2015:2024
 lista_pop_bruta <- list()
 
@@ -373,7 +376,6 @@ taxa_padronizada_rs <- RS_oe %>%
   summarise(total_oe_rs = sum(oe_rs, na.rm = TRUE)) %>%
   mutate(taxa_padronizada_rs = (total_oe_rs / pop_padrao_total) * 100000) %>%
   ungroup()
-
 #---------------------------------#
 
 #----TAXA BRUTA----#
@@ -547,7 +549,7 @@ write.csv2(mestra, r"(C:\R\DCNT\t1.csv)", na = "", row.names = FALSE)
 mun_shp <- read_sf(r'(C:\R\DCNT\mun_shp.gpkg)')
 
 #CLASSIFICAÇÃO CAUSABAS
-SIM_transito_grupos <- SIM_padrao %>%
+SIM_transito_grupos <- SIM_CID %>%
   #Classificação de CID
   mutate(
     GRUPO_transito = case_when(
@@ -625,4 +627,151 @@ ggplot(data = mapa_transito_final) +
     subtitle = "Municípios de São Paulo com contorno das Regionais de Saúde",
     caption = "Fonte: SIM/DATASUS"
   )
+
+
+#--------------------------------------------------------#
+#-----------------------SUICÍDIO-------------------------#
+#--------------------------------------------------------#
+
+SIM_sui <- SIM_CID %>%
+  mutate(IDADEanos = as.numeric(IDADEanos)) %>%
+  filter(IDADEanos >= 5) %>%
+  filter(CID3 >= 'X60' & CID3 <= 'X84' | CAUSABAS == 'Y870') %>%
+  mutate(
+    FAIXA_ETARIA = case_when(
+      IDADEanos >= 5 & IDADEanos < 20 ~ '05-19 anos',
+      IDADEanos >= 20 & IDADEanos < 39 ~ '20-39 anos',
+      IDADEanos >= 40 & IDADEanos < 59 ~ '40-59 anos',
+      IDADEanos >= 60 ~ '60 e mais',
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(FAIXA_ETARIA))
+
+#Criando o estrato por sexo e ambos os sexos
+df_obitos_sexo_sui <- SIM_sui
+df_obitos_sexototal_sui <- SIM_sui %>%
+  mutate(SEXO = "Total")
+
+SIM_sui_final <- rbind(df_obitos_sexo_sui, df_obitos_sexototal_sui)
+
+NUMERADOR_SUI <- SIM_sui_final %>%
+  group_by(CODMUNRES, SEXO, ANOOBITO, FAIXA_ETARIA) %>%
+  summarise(obitos = n()) %>%
+  ungroup()
+
+DENOMINADOR_SUI <- pop_bruta_total %>%
+  mutate(
+    FAIXA_ETARIA = case_when(
+        IDADE %in% c("005", "010", "015") ~ "5-19 anos",
+        IDADE %in% c("020", "025", "030", "035") ~ "20-39 anos",
+        IDADE %in% c("040", "045", "050", "055") ~ "40-59 anos",
+        as.numeric(IDADE) >= 60 ~ "60 anos e mais",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(FAIXA_ETARIA))
+
+#TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
+DENOMINADOR_SUI <- DENOMINADOR_SUI %>%
+  #Converter tipos
+  mutate(
+    COD_MUN = as.character(COD_MUN),
+    ANO = as.double(as.character(ANO)),
+    SEXO = as.character(SEXO)
+  ) %>%
+  #Filtrar mun de SP
+  filter(str_starts(COD_MUN, "35")) %>%
+  #Traduzir SEXO
+  mutate(
+    SEXO = case_when(
+      SEXO == "1" ~ "Masculino",
+      SEXO == "2" ~ "Feminino",
+      SEXO == "Total" ~ "Total",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  #Renomear
+  rename(
+    CODMUNRES = COD_MUN,
+    ANOOBITO = ANO
+  ) %>%
+  #Padronizar CODMUNRES
+  mutate(
+    CODMUNRES = str_sub(CODMUNRES, start = 1L, end = 6L)
+  )
+
+chaves_sui <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
+join_sui <- left_join(NUMERADOR_SUI, DENOMINADOR_SUI, by = chaves_sui) %>%
+  filter(!is.na(POP))
+
+sui <- join_sui %>%
+  mutate(taxa_mortalidade = (obitos / POP) * 100000 )
+
+#--------------------------------------------------------#
+#-------------------------QUEDAS-------------------------#
+#--------------------------------------------------------#
+
+SIM_quedas <- SIM_CID %>%
+  mutate(IDADEanos = as.numeric(IDADEanos)) %>%
+  filter(IDADEanos >= 60) %>%
+  mutate(FAIXA_ETARIA = '60 anos e mais') %>%
+  filter(CID3 >= 'W00' & CID3 <= 'W19')
+
+#Criando o estrato por sexo e ambos os sexos
+df_obitos_sexo_quedas <- SIM_quedas
+df_obitos_sexototal_quedas <- SIM_quedas %>%
+  mutate(SEXO = "Total")
+
+SIM_quedas_final <- rbind(df_obitos_sexo_quedas, df_obitos_sexototal_quedas)
+
+NUMERADOR_quedas <- SIM_quedas_final %>%
+  group_by(CODMUNRES, SEXO, ANOOBITO, FAIXA_ETARIA) %>%
+  summarise(obitos = n()) %>%
+  ungroup()
+
+DENOMINADOR_quedas <- pop_bruta_total %>%
+  mutate(
+    FAIXA_ETARIA = case_when(
+      as.numeric(IDADE) >= 60 ~ "60 anos e mais",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(FAIXA_ETARIA) | IDADE == 059)
+
+#TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
+DENOMINADOR_quedas <- DENOMINADOR_quedas %>%
+  #Converter tipos
+  mutate(
+    COD_MUN = as.character(COD_MUN),
+    ANO = as.double(as.character(ANO)),
+    SEXO = as.character(SEXO)
+  ) %>%
+  #Filtrar mun de SP
+  filter(str_starts(COD_MUN, "35")) %>%
+  #Traduzir SEXO
+  mutate(
+    SEXO = case_when(
+      SEXO == "1" ~ "Masculino",
+      SEXO == "2" ~ "Feminino",
+      SEXO == "Total" ~ "Total",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  #Renomear
+  rename(
+    CODMUNRES = COD_MUN,
+    ANOOBITO = ANO
+  ) %>%
+  #Padronizar CODMUNRES
+  mutate(
+    CODMUNRES = str_sub(CODMUNRES, start = 1L, end = 6L)
+  )
+
+chaves_quedas <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
+join_quedas <- left_join(NUMERADOR_quedas, DENOMINADOR_quedas, by = chaves_quedas) %>%
+  filter(!is.na(POP))
+
+quedas <- join_quedas %>%
+  mutate(taxa_mortalidade = (obitos / POP) * 100000 )
 
