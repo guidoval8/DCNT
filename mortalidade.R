@@ -109,7 +109,8 @@ NUMERADOR_SIM <- SIM_filtrado_final %>%
   summarise(
     obitos = n()
   ) %>%
-  ungroup()
+  ungroup() %>%
+  filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino'))
 #------------------------------#
 
 #----POPULAÇÃO----#
@@ -506,15 +507,13 @@ mestra_base_2015 <- left_join(
   rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
 
 # Aplica a lógica condicional para a meta de redução
-# O objetivo de 10% de redução até 2030 para o Câncer de Mama é equivalente a uma 
-# redução anual composta de aproximadamente 0.7% (0.007).
 
 mestra <- mestra_base_2015 %>%
   mutate(
     TAXA_ANUAL_REDUCAO = case_when(
-      GRUPO_DCNT == 'Cancer de Mama' & ANOOBITO <= 2030 ~ 0.007, #Meta de 10% até 2030
-      GRUPO_DCNT == 'Cancer de Utero' & ANOOBITO <= 2030 ~ 0.0147, #Meta de 20% até 2030
-      GRUPO_DCNT == 'Cancer do Aparelho Digestivo' & ANOOBITO <= 2030 ~ 0.007,
+      GRUPO_DCNT == 'Cancer de Mama' & ANOOBITO <= 2030 ~ 0.0067, #0,67% ano
+      GRUPO_DCNT == 'Cancer de Colo de Utero' & ANOOBITO <= 2030 ~ 0.0137, #1,33% ano
+      GRUPO_DCNT == 'Cancer do Aparelho Digestivo' & ANOOBITO <= 2030 ~ 0.007, #0,67% ano
       TRUE ~ 0.022 # Meta de 2.2% ao ano para os demais grupos
     )
   ) %>%
