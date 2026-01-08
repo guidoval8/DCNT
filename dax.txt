@@ -1,0 +1,31 @@
+#-----Mortalidade-----#
+  
+bruta_cor = 
+VAR TaxaBruta =
+    SELECTEDVALUE(t1[Taxa_Bruta])
+
+VAR Meta =
+    SELECTEDVALUE(t1[taxa_esperada_meta])
+
+VAR Dif =
+    TaxaBruta - Meta
+RETURN
+SWITCH(
+    TRUE(),
+    Dif <= 0, "#28A745",                     -- verde: atingiu ou ficou abaixo
+    Dif <= 0.10 * Meta, "#FFC107",           -- amarelo: até 10% acima
+    "#DC3545"                                -- vermelho: >10% acima
+)
+
+padronizada_cor = 
+VAR taxa_padronizada = SELECTEDVALUE(t1[Taxa_Padronizada])
+var taxa_padro_esperada = SELECTEDVALUE(t1[taxa_padronizada_esperada_meta])
+var dif = taxa_padronizada - taxa_padro_esperada
+RETURN
+SWITCH(
+    TRUE(),
+    Dif <= 0, "#28A745",                     -- verde: atingiu ou ficou abaixo
+    Dif <= 0.10 * taxa_padro_esperada, "#FFC107",           -- amarelo: até 10% acima
+    "#DC3545"                                -- vermelho: >10% acima
+)
+  
