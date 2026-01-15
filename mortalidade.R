@@ -11,6 +11,7 @@ library(openxlsx)
 library(rio)
 library(sf)
 library(ggplot2)
+library(rmapshaper)
 
 options(download.file.method = "wininet")
 #devtools::install_github("danicat/read.dbc")
@@ -893,4 +894,16 @@ causas_externas <- bind_rows(transito, sui, quedas) %>%
   filter(!is.na(SEXO))
 
 write.csv2(causas_externas, r"(C:\R\DCNT\20251501_causaexterna.csv)", na = "", row.names = FALSE )
+
+#MAPAS
+mun_shp <- read_sf(r'(C:\R\DCNT\mun_shp.gpkg)')
+
+mapa_export <- mun_shp %>%
+  mutate(CODMUNRES = str_sub(as.character(CD_MUN), 1, 6)) %>%
+  select(CODMUNRES, NM_MUN)
+
+mapa_export <- ms_simplify(mapa_export, keep = 0.05, keep_shapes = TRUE)
+mapa_export <- st_transform(mapa_export, 4326)
+
+st_write(mapa_export, r"(C:\R\DCNT\mapa_municipios_sp.shp)", append = FALSE)
 
