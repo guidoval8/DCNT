@@ -37,9 +37,7 @@ SIM_CID <- SIM %>%
     CAUSABAS = str_trim(toupper(as.character(CAUSABAS))),
     CID3 = str_sub(CAUSABAS, 1,3)
   )
-
 #----#
-
 SIM_padrao <- SIM_CID %>%
   #Filtrar idade
   mutate(IDADEanos = as.numeric(IDADEanos)) %>%
@@ -581,211 +579,318 @@ NUMERADOR_TRANSITO <- SIM_transito_final %>%
   group_by(CODMUNOCOR, SEXO, ANOOBITO, GRUPO_transito) %>%
   summarise(obitos = n())%>%
   ungroup() %>%
-  filter(CODMUNOCOR >= 350000 & CODMUNOCOR <= 359999) %>% #Filtra estado de São Paulo
+  filter(str_starts(as.character(CODMUNOCOR), "35")) %>% #Filtra estado de São Paulo
   mutate(grupo_causa_externa = 'Transito') %>%
-  rename(MUNICIPIO = CODMUNOCOR )
+  rename(MUNICIPIO = CODMUNOCOR ) %>%
+  mutate(Nivel_Geografico = 'Municipio')
 
-#UNIR COM O MAPA
-mapa_transito <- NUMERADOR_TRANSITO %>%
-  filter(ANOOBITO %in% c(2015,2024)) %>%
-  filter(GRUPO_transito == 'Transito_todas') %>%
-  filter(SEXO == 'Total') %>%
-  group_by(MUNICIPIO, ANOOBITO, GRUPO_transito) %>%
-  summarise(obitos = sum(obitos, na.rm = TRUE), .groups = 'drop') %>%
-  
-  #Pivot para ter ano lado a lado
-  pivot_wider(names_from = ANOOBITO,
-              names_prefix = "ano_",
-              values_from = obitos,
-              values_fill = 0) %>%
-  mutate(
-    var_pct = ((ano_2024 - ano_2015) / ano_2015) * 100
-  ) %>%
-  #caso 2015 for 0
-  mutate(var_pct = ifelse(is.infinite(var_pct), 100, var_pct))
+#ESTADO
+NUMERADOR_TRANSITO_ESTADO <- SIM_transito_final %>%
+  filter(str_starts(as.character(CODMUNOCOR), "35")) %>% #Filtra estado de São Paulo
+  group_by(SEXO, ANOOBITO, GRUPO_transito) %>%
+  summarise(obitos = n())%>%
+  ungroup() %>%
+  mutate(grupo_causa_externa = 'Transito') %>%
+  mutate(Nivel_Geografico = 'Estado') %>%
+  mutate(MUNICIPIO = 'Estado')
 
-#MAPA
-mapa_transito <- mapa_transito %>%
-  mutate(categoria_var = cut(var_pct,
-                             breaks = quantile(var_pct, probs = seq(0, 1, 0.25), na.rm = TRUE),
-                             include.lowest  = TRUE,
-                             labels = c("1º Quartil (Menor variação)", "2º Quartil", "3º Quartil", "4º Quartil (Maior variação)"))
-         )
+transito <- bind_rows(NUMERADOR_TRANSITO, NUMERADOR_TRANSITO_ESTADO)
 
-#UNIR MAPA X DADOS
-mapa_transito_final <- left_join(mun_shp, mapa_transito, by = c('CD_MUN' = 'MUNICIPIO'))
-
-#CONTORNO RS
-rs_shp <- mun_shp %>%
-  group_by(NOME_RS_2025) %>%
-  summarise(geometry = st_union(geom)) %>%
-  ungroup()
-
-#MAPA
-ggplot(data = mapa_transito_final) +
-  geom_sf(aes(fill = categoria_var), color = 'white', size = 0.0) +
-  geom_sf(data = rs_shp, fill= 'transparent', color = 'black', size = 0.6) +
-  scale_fill_brewer(palette = "RdYlGn", direction = -1, name = 'Variação %') +
-  theme_void() +
-  labs(
-    title = "Variação Percentual do Número de Óbitos por lesões de Trânsito (2024 vs 2015)",
-    subtitle = "Municípios de São Paulo com contorno das Regionais de Saúde",
-    caption = "Fonte: SIM/DATASUS"
-  )
-
+# #UNIR COM O MAPA
+# mapa_transito <- NUMERADOR_TRANSITO %>%
+#   filter(ANOOBITO %in% c(2015,2024)) %>%
+#   filter(GRUPO_transito == 'Transito_todas') %>%
+#   filter(SEXO == 'Total') %>%
+#   group_by(MUNICIPIO, ANOOBITO, GRUPO_transito) %>%
+#   summarise(obitos = sum(obitos, na.rm = TRUE), .groups = 'drop') %>%
+#   
+#   #Pivot para ter ano lado a lado
+#   pivot_wider(names_from = ANOOBITO,
+#               names_prefix = "ano_",
+#               values_from = obitos,
+#               values_fill = 0) %>%
+#   mutate(
+#     var_pct = ((ano_2024 - ano_2015) / ano_2015) * 100
+#   ) %>%
+#   #caso 2015 for 0
+#   mutate(var_pct = ifelse(is.infinite(var_pct), 100, var_pct))
+# 
+# #MAPA
+# mapa_transito <- mapa_transito %>%
+#   mutate(categoria_var = cut(var_pct,
+#                              breaks = quantile(var_pct, probs = seq(0, 1, 0.25), na.rm = TRUE),
+#                              include.lowest  = TRUE,
+#                              labels = c("1º Quartil (Menor variação)", "2º Quartil", "3º Quartil", "4º Quartil (Maior variação)"))
+#          )
+# 
+# #UNIR MAPA X DADOS
+# mapa_transito_final <- left_join(mun_shp, mapa_transito, by = c('CD_MUN' = 'MUNICIPIO'))
+# 
+# #CONTORNO RS
+# rs_shp <- mun_shp %>%
+#   group_by(NOME_RS_2025) %>%
+#   summarise(geometry = st_union(geom)) %>%
+#   ungroup()
+# 
+# #MAPA
+# ggplot(data = mapa_transito_final) +
+#   geom_sf(aes(fill = categoria_var), color = 'white', size = 0.0) +
+#   geom_sf(data = rs_shp, fill= 'transparent', color = 'black', size = 0.6) +
+#   scale_fill_brewer(palette = "RdYlGn", direction = -1, name = 'Variação %') +
+#   theme_void() +
+#   labs(
+#     title = "Variação Percentual do Número de Óbitos por lesões de Trânsito (2024 vs 2015)",
+#     subtitle = "Municípios de São Paulo com contorno das Regionais de Saúde",
+#     caption = "Fonte: SIM/DATASUS"
+#   )
 
 #--------------------------------------------------------#
 #-----------------------SUICÍDIO-------------------------#
 #--------------------------------------------------------#
-
 SIM_sui <- SIM_CID %>%
   mutate(IDADEanos = as.numeric(IDADEanos)) %>%
   filter(IDADEanos >= 5) %>%
+  mutate(CODMUNRES = str_sub(str_trim(as.character(CODMUNRES)), 1, 6)) %>%
   filter(CID3 >= 'X60' & CID3 <= 'X84' | CAUSABAS == 'Y870') %>%
   mutate(
     FAIXA_ETARIA = case_when(
       IDADEanos >= 5 & IDADEanos < 20 ~ '05-19 anos',
       IDADEanos >= 20 & IDADEanos < 39 ~ '20-39 anos',
       IDADEanos >= 40 & IDADEanos < 59 ~ '40-59 anos',
-      IDADEanos >= 60 ~ '60 e mais',
+      IDADEanos >= 60 ~ '60 anos e mais',
       TRUE ~ NA_character_
     )
   ) %>%
   filter(!is.na(FAIXA_ETARIA))
 
-#Criando o estrato por sexo e ambos os sexos
-df_obitos_sexo_sui <- SIM_sui
-df_obitos_sexototal_sui <- SIM_sui %>%
+#Numerador MUNICIPAL base
+NUMERADOR_BASE_sui <- SIM_sui %>%
+  group_by(CODMUNRES, ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(obitos = n(), .groups = "drop")
+
+#Total faixa etaria
+NUM_FAIXA_TOTAL_sui <- NUMERADOR_BASE_sui %>%
+  group_by(CODMUNRES, ANOOBITO, SEXO) %>%
+  summarise(obitos = sum(obitos), .groups = "drop") %>%
+  mutate(FAIXA_ETARIA = "Total")
+
+#Total sexo
+NUM_SEXO_TOTAL_sui <- NUMERADOR_BASE_sui %>%
+  group_by(CODMUNRES, ANOOBITO, FAIXA_ETARIA) %>%
+  summarise(obitos = sum(obitos), .groups = "drop") %>%
   mutate(SEXO = "Total")
 
-SIM_sui_final <- rbind(df_obitos_sexo_sui, df_obitos_sexototal_sui)
+#Total ambos
+NUM_TOTAL_sui <- NUMERADOR_BASE_sui %>%
+  group_by(CODMUNRES, ANOOBITO) %>%
+  summarise(obitos = sum(obitos), .groups = "drop") %>%
+  mutate(SEXO = "Total", FAIXA_ETARIA = "Total")
 
-NUMERADOR_SUI <- SIM_sui_final %>%
-  group_by(CODMUNRES, SEXO, ANOOBITO, FAIXA_ETARIA) %>%
-  summarise(obitos = n()) %>%
-  ungroup()
+#Numerador final sui município
+NUMERADOR_SUI <- bind_rows(NUMERADOR_BASE_sui,NUM_FAIXA_TOTAL_sui,NUM_SEXO_TOTAL_sui,NUM_TOTAL_sui)
 
-DENOMINADOR_SUI <- pop_bruta_total %>%
+#Numerador ESTADO
+NUMERADOR_SUI_ESTADO <- NUMERADOR_SUI %>%
+  group_by(ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(obitos = sum(obitos), .groups = "drop") %>%
   mutate(
-    FAIXA_ETARIA = case_when(
-        IDADE %in% c("005", "010", "015") ~ "5-19 anos",
-        IDADE %in% c("020", "025", "030", "035") ~ "20-39 anos",
-        IDADE %in% c("040", "045", "050", "055") ~ "40-59 anos",
-        as.numeric(IDADE) >= 60 ~ "60 anos e mais",
-      TRUE ~ NA_character_
-    )
-  ) %>%
-  filter(!is.na(FAIXA_ETARIA))
+    MUNICIPIO = "Estado",
+    Nivel_Geografico = "Estado"
+  )
 
-#TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
-DENOMINADOR_SUI <- DENOMINADOR_SUI %>%
-  #Converter tipos
-  mutate(
-    COD_MUN = as.character(COD_MUN),
-    ANO = as.double(as.character(ANO)),
-    SEXO = as.character(SEXO)
-  ) %>%
-  #Filtrar mun de SP
+#Denominador - População
+DENOMINADOR_BASE_sui <- pop_bruta_total %>%
   filter(str_starts(COD_MUN, "35")) %>%
-  #Traduzir SEXO
   mutate(
+    COD_MUN = str_sub(as.character(COD_MUN), 1, 6),
+    ANO = as.numeric(as.character(ANO)),
+    IDADE_NUM = as.numeric(IDADE), 
     SEXO = case_when(
       SEXO == "1" ~ "Masculino",
       SEXO == "2" ~ "Feminino",
-      SEXO == "Total" ~ "Total",
       TRUE ~ NA_character_
     )
   ) %>%
-  #Renomear
+  mutate(
+    FAIXA_ETARIA = case_when(
+      IDADE_NUM >= 5 & IDADE_NUM < 20 ~ "05-19 anos",
+      IDADE_NUM >= 20 & IDADE_NUM < 39 ~ "20-39 anos",
+      IDADE_NUM >= 40 & IDADE_NUM < 59 ~ "40-59 anos",
+      IDADE_NUM >= 60                 ~ "60 anos e mais",
+      TRUE ~ NA_character_ 
+    )
+  ) %>%
+  filter(!is.na(FAIXA_ETARIA)) %>% 
+  group_by(COD_MUN, ANO, SEXO, FAIXA_ETARIA) %>%
+  summarise(populacao = sum(POP, na.rm = TRUE), .groups = "drop")
+
+#Total faixa etária
+DENOM_FAIXA_TOTAL_sui <- DENOMINADOR_BASE_sui %>%
+  group_by(COD_MUN, ANO, SEXO) %>%
+  summarise(populacao = sum(populacao), .groups = "drop") %>%
+  mutate(FAIXA_ETARIA = "Total")
+
+#Total sexo
+DENOM_SEXO_TOTAL_sui <- DENOMINADOR_BASE_sui %>%
+  group_by(COD_MUN, ANO, FAIXA_ETARIA) %>%
+  summarise(populacao = sum(populacao), .groups = "drop") %>%
+  mutate(SEXO = "Total")
+
+#Total geral
+DENOM_TOTAL_sui <- DENOMINADOR_BASE_sui %>%
+  group_by(COD_MUN, ANO) %>%
+  summarise(populacao = sum(populacao), .groups = "drop") %>%
+  mutate(SEXO = "Total", FAIXA_ETARIA = "Total")
+
+#Denominador final MUNICIPIO
+DENOMINADOR_SUI <- bind_rows(DENOMINADOR_BASE_sui, DENOM_FAIXA_TOTAL_sui, DENOM_SEXO_TOTAL_sui, DENOM_TOTAL_sui) %>%
   rename(
     CODMUNRES = COD_MUN,
     ANOOBITO = ANO
-  ) %>%
-  #Padronizar CODMUNRES
-  mutate(
-    CODMUNRES = str_sub(CODMUNRES, start = 1L, end = 6L)
   )
 
-chaves_sui <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
-join_sui <- left_join(NUMERADOR_SUI, DENOMINADOR_SUI, by = chaves_sui) %>%
-  filter(!is.na(POP))
+#Denominador final ESTADO
+DENOMINADOR_SUI_ESTADO <- DENOMINADOR_SUI %>%
+  group_by(ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(populacao = sum(populacao), .groups = "drop") %>%
+  mutate(
+    MUNICIPIO = "Estado",
+    Nivel_Geografico = "Estado"
+  )
 
-sui <- join_sui %>%
-  mutate(taxa_mortalidade = (obitos / POP) * 100000) %>%
-  mutate(grupo_causa_externa = 'suicidio') %>%
-  rename(MUNICIPIO = CODMUNRES)
+sui_municipio <- left_join(
+  NUMERADOR_SUI,
+  DENOMINADOR_SUI,
+  by = c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
+) %>%
+  filter(!is.na(populacao)) %>%
+  mutate(
+    taxa_mortalidade = (obitos / populacao) * 100000,
+    grupo_causa_externa = "suicidio",
+    MUNICIPIO = CODMUNRES,
+    Nivel_Geografico = "Municipio"
+  ) %>%
+  select(-CODMUNRES)
 
+sui_estado <- left_join(
+  NUMERADOR_SUI_ESTADO,
+  DENOMINADOR_SUI_ESTADO,
+  by = c("ANOOBITO", "SEXO", "FAIXA_ETARIA", "MUNICIPIO", "Nivel_Geografico")
+) %>%
+  mutate(
+    taxa_mortalidade = (obitos / populacao) * 100000,
+    grupo_causa_externa = "suicidio"
+  )
+
+sui <- bind_rows(sui_municipio, sui_estado)
 #--------------------------------------------------------#
 #-------------------------QUEDAS-------------------------#
 #--------------------------------------------------------#
-
 SIM_quedas <- SIM_CID %>%
   mutate(IDADEanos = as.numeric(IDADEanos)) %>%
   filter(IDADEanos >= 60) %>%
   mutate(FAIXA_ETARIA = '60 anos e mais') %>%
   filter(CID3 >= 'W00' & CID3 <= 'W19')
 
-#Criando o estrato por sexo e ambos os sexos
-df_obitos_sexo_quedas <- SIM_quedas
-df_obitos_sexototal_quedas <- SIM_quedas %>%
+#Numerador MUNICIPAL base
+NUMERADOR_BASE_quedas <- SIM_quedas %>%
+  group_by(CODMUNRES, ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(obitos = n(), .groups = 'drop')
+
+#Total sexo
+NUM_SEXO_TOTAL_quedas <- NUMERADOR_BASE_quedas %>%
+  group_by(CODMUNRES, ANOOBITO, FAIXA_ETARIA) %>%
+  summarise(obitos = sum(obitos), .groups = "drop") %>%
   mutate(SEXO = "Total")
 
-SIM_quedas_final <- rbind(df_obitos_sexo_quedas, df_obitos_sexototal_quedas)
+#Numerador final quedas municipio
+NUMERADOR_QUEDAS <- bind_rows(NUMERADOR_BASE_quedas, NUM_SEXO_TOTAL_quedas)
 
-NUMERADOR_quedas <- SIM_quedas_final %>%
-  group_by(CODMUNRES, SEXO, ANOOBITO, FAIXA_ETARIA) %>%
-  summarise(obitos = n()) %>%
-  ungroup()
-
-DENOMINADOR_quedas <- pop_bruta_total %>%
+#Numerador ESTADO
+NUMERADOR_QUEDAS_ESTADO <- NUMERADOR_QUEDAS %>%
+  group_by(ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(obitos = sum(obitos), .groups = "drop") %>%
   mutate(
-    FAIXA_ETARIA = case_when(
-      as.numeric(IDADE) >= 60 ~ "60 anos e mais",
-      TRUE ~ NA_character_
-    )
-  ) %>%
-  filter(!is.na(FAIXA_ETARIA) | IDADE == 059)
+    MUNICIPIO = "Estado",
+    Nivel_Geografico = "Estado"
+  )
 
-#TRANSFORMAÇÃO PARA LINKAGE ENTRE NUMERADOR E DENOMINADOR
-DENOMINADOR_quedas <- DENOMINADOR_quedas %>%
-  #Converter tipos
-  mutate(
-    COD_MUN = as.character(COD_MUN),
-    ANO = as.double(as.character(ANO)),
-    SEXO = as.character(SEXO)
-  ) %>%
-  #Filtrar mun de SP
+#Denominador - População
+DENOMINADOR_BASE_quedas <- pop_bruta_total %>%
   filter(str_starts(COD_MUN, "35")) %>%
-  #Traduzir SEXO
   mutate(
+    COD_MUN = str_sub(as.character(COD_MUN), 1, 6),
+    ANO = as.numeric(as.character(ANO)),
+    IDADE_NUM = as.numeric(IDADE), 
     SEXO = case_when(
       SEXO == "1" ~ "Masculino",
       SEXO == "2" ~ "Feminino",
-      SEXO == "Total" ~ "Total",
       TRUE ~ NA_character_
     )
   ) %>%
-  #Renomear
+  mutate(
+    FAIXA_ETARIA = case_when(
+      IDADE_NUM >= 60 ~ "60 anos e mais",
+      TRUE ~ NA_character_ 
+    )
+  ) %>%
+  filter(!is.na(FAIXA_ETARIA)) %>% 
+  group_by(COD_MUN, ANO, SEXO, FAIXA_ETARIA) %>%
+  summarise(populacao = sum(POP, na.rm = TRUE), .groups = "drop")
+
+#Total sexo
+DENOM_SEXO_TOTAL_quedas <- DENOMINADOR_BASE_quedas %>%
+  group_by(COD_MUN, ANO, FAIXA_ETARIA) %>%
+  summarise(populacao = sum(populacao), .groups = "drop") %>%
+  mutate(SEXO = "Total")
+
+#Denominador final MUNICIPIO
+DENOMINADOR_QUEDAS <- bind_rows(DENOMINADOR_BASE_quedas, DENOM_SEXO_TOTAL_quedas) %>%
   rename(
     CODMUNRES = COD_MUN,
     ANOOBITO = ANO
-  ) %>%
-  #Padronizar CODMUNRES
-  mutate(
-    CODMUNRES = str_sub(CODMUNRES, start = 1L, end = 6L)
   )
 
-chaves_quedas <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
-join_quedas <- left_join(NUMERADOR_quedas, DENOMINADOR_quedas, by = chaves_quedas) %>%
-  filter(!is.na(POP))
+#Denominador final ESTADO
+DENOMINADOR_QUEDAS_ESTADO <- DENOMINADOR_QUEDAS %>%
+  group_by(ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(populacao = sum(populacao), .groups = "drop") %>%
+  mutate(
+    MUNICIPIO = "Estado",
+    Nivel_Geografico = "Estado"
+  )
 
-quedas <- join_quedas %>%
-  mutate(taxa_mortalidade = (obitos / POP) * 100000) %>%
-  mutate(grupo_causa_externa = 'quedas') %>%
-  rename(MUNICIPIO = CODMUNRES)
+quedas_municipio <- left_join(
+  NUMERADOR_QUEDAS,
+  DENOMINADOR_QUEDAS,
+  by = c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
+) %>%
+  filter(!is.na(populacao)) %>%
+  mutate(
+    taxa_mortalidade = (obitos / populacao) * 100000,
+    grupo_causa_externa = "quedas",
+    MUNICIPIO = CODMUNRES,
+    Nivel_Geografico = "Municipio"
+  ) %>%
+  select(-CODMUNRES)
+
+quedas_estado <- left_join(
+  NUMERADOR_QUEDAS_ESTADO,
+  DENOMINADOR_QUEDAS_ESTADO,
+  by = c("ANOOBITO", "SEXO", "FAIXA_ETARIA", "MUNICIPIO", "Nivel_Geografico")
+) %>%
+  mutate(
+    taxa_mortalidade = (obitos / populacao) * 100000,
+    grupo_causa_externa = "quedas"
+  )
+
+quedas <- bind_rows(quedas_municipio, quedas_estado)
 
 #----Empilhar causas externas----#
-causas_externas <- bind_rows(NUMERADOR_TRANSITO, sui, quedas)
+causas_externas <- bind_rows(transito, sui, quedas) %>%
+  left_join(RRAS_Municipios %>% select(COD_6_mun, MUNICIPIO), by = c ('MUNICIPIO' = 'COD_6_mun')) %>%
+  rename(NOME_MUNICIPIO = MUNICIPIO.y) %>%
+  filter(!is.na(SEXO))
 
 write.csv2(causas_externas, r"(C:\R\DCNT\20251501_causaexterna.csv)", na = "", row.names = FALSE )
 
