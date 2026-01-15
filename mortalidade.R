@@ -9,7 +9,6 @@ library(foreign)
 library(stringr)
 library(openxlsx)
 library(rio)
-library(slider)
 library(sf)
 library(ggplot2)
 
@@ -38,6 +37,8 @@ SIM_CID <- SIM %>%
     CAUSABAS = str_trim(toupper(as.character(CAUSABAS))),
     CID3 = str_sub(CAUSABAS, 1,3)
   )
+
+#----#
 
 SIM_padrao <- SIM_CID %>%
   #Filtrar idade
@@ -528,18 +529,12 @@ mestra <- mestra_base_2015 %>%
   mutate(
     taxa_padronizada_esperada_meta = Taxa_Padronizada_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
   ) %>%
-  mutate(
-    reduc_meta_bruta = ifelse(Taxa_Padronizada < taxa_esperada_meta, 1, 0)
-  ) %>%
-  mutate(
-    reduc_meta_padro = ifelse(Taxa_Padronizada < taxa_esperada_meta, 1, 0)
-  ) %>%
   select(
     "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT",
-    "Taxa_Padronizada", "Taxa_Padronizada_2015","taxa_padronizada_esperada_meta","Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta", "reduc_meta_bruta", "reduc_meta_padro"
+    "Taxa_Padronizada", "Taxa_Padronizada_2015","taxa_padronizada_esperada_meta","Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta"
   )
 
-write.csv2(mestra, r"(C:\R\DCNT\t1.csv)", na = "", row.names = FALSE)
+#write.csv2(mestra, r"(C:\R\DCNT\20250108_t1.csv)", na = "", row.names = FALSE)
 
 #--------------------------------------------------------#
 #-----------------MORTALIDADE TRÂNSITO-------------------#
@@ -562,7 +557,7 @@ SIM_transito_grupos <- SIM_CID %>%
   ) %>%
   filter(!is.na(GRUPO_transito))
 
-SIM_transito_todos <- SIM_padrao %>%
+SIM_transito_todos <- SIM_CID %>%
   mutate(
     GRUPO_transito = case_when(
       (CID3 >= 'V01' & CID3 <= 'V89' ~ 'Transito_todas'),
@@ -574,18 +569,28 @@ SIM_transito_todos <- SIM_padrao %>%
 #EMPILHAR AS CLASSIFICAÇÕES
 SIM_filtrado_transito <- rbind(SIM_transito_grupos, SIM_transito_todos)
 
+#Criando o estrato por sexo e ambos os sexos
+df_transito_sexo <- SIM_filtrado_transito
+df_transito_sexototal <- SIM_filtrado_transito %>%
+  mutate(SEXO = "Total")
+
+SIM_transito_final <- rbind(df_transito_sexo, df_transito_sexototal)
+
 #CONTAGEM DE ÓBITOS
-NUMERADOR_TRANSITO <- SIM_filtrado_transito %>%
-  group_by(CODMUNOCOR, ANOOBITO, GRUPO_transito) %>%
+NUMERADOR_TRANSITO <- SIM_transito_final %>%
+  group_by(CODMUNOCOR, SEXO, ANOOBITO, GRUPO_transito) %>%
   summarise(obitos = n())%>%
   ungroup() %>%
-  filter(CODMUNOCOR >= 350000 & CODMUNOCOR <= 359999) #Filtra municipio de São Paulo
+  filter(CODMUNOCOR >= 350000 & CODMUNOCOR <= 359999) %>% #Filtra estado de São Paulo
+  mutate(grupo_causa_externa = 'Transito') %>%
+  rename(MUNICIPIO = CODMUNOCOR )
 
 #UNIR COM O MAPA
 mapa_transito <- NUMERADOR_TRANSITO %>%
   filter(ANOOBITO %in% c(2015,2024)) %>%
   filter(GRUPO_transito == 'Transito_todas') %>%
-  group_by(CODMUNOCOR, ANOOBITO, GRUPO_transito) %>%
+  filter(SEXO == 'Total') %>%
+  group_by(MUNICIPIO, ANOOBITO, GRUPO_transito) %>%
   summarise(obitos = sum(obitos, na.rm = TRUE), .groups = 'drop') %>%
   
   #Pivot para ter ano lado a lado
@@ -608,7 +613,7 @@ mapa_transito <- mapa_transito %>%
          )
 
 #UNIR MAPA X DADOS
-mapa_transito_final <- left_join(mun_shp, mapa_transito, by = c('CD_MUN' = 'CODMUNOCOR'))
+mapa_transito_final <- left_join(mun_shp, mapa_transito, by = c('CD_MUN' = 'MUNICIPIO'))
 
 #CONTORNO RS
 rs_shp <- mun_shp %>%
@@ -706,7 +711,9 @@ join_sui <- left_join(NUMERADOR_SUI, DENOMINADOR_SUI, by = chaves_sui) %>%
   filter(!is.na(POP))
 
 sui <- join_sui %>%
-  mutate(taxa_mortalidade = (obitos / POP) * 100000 )
+  mutate(taxa_mortalidade = (obitos / POP) * 100000) %>%
+  mutate(grupo_causa_externa = 'suicidio') %>%
+  rename(MUNICIPIO = CODMUNRES)
 
 #--------------------------------------------------------#
 #-------------------------QUEDAS-------------------------#
@@ -773,5 +780,12 @@ join_quedas <- left_join(NUMERADOR_quedas, DENOMINADOR_quedas, by = chaves_queda
   filter(!is.na(POP))
 
 quedas <- join_quedas %>%
-  mutate(taxa_mortalidade = (obitos / POP) * 100000 )
+  mutate(taxa_mortalidade = (obitos / POP) * 100000) %>%
+  mutate(grupo_causa_externa = 'quedas') %>%
+  rename(MUNICIPIO = CODMUNRES)
+
+#----Empilhar causas externas----#
+causas_externas <- bind_rows(NUMERADOR_TRANSITO, sui, quedas)
+
+write.csv2(causas_externas, r"(C:\R\DCNT\20251501_causaexterna.csv)", na = "", row.names = FALSE )
 
