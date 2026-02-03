@@ -1,14 +1,6 @@
-SIH15 <- fetch_datasus(year_start = 2015, year_end = 2015, month_start = 1, month_end = 12, uf = "SP", information_system = "SIH-RD")
-SIH15 <- process_sih(SIH15)
-
-library(read.dbc)
-library(fst)
-library(data.table)
-
 sih <- read.dbc("C:\\R\\DCNT\\SIH\\RDSP1608.dbc")
 SIH15 <- process_sih(sih)
 
-freq(SIH15$DT_INTER)
 
 names(SIH15)
 
@@ -35,10 +27,10 @@ for (arq in arquivos) {
   message("Processando: ", basename(arq))
   
   df <- read.dbc(arq) |>
-    process_sih() |>
+    as.character(MUNIC_RES)
     select(any_of(colunas)) |>
     filter(IDADE >= 60) %>%
-    filter(str_starts(MUNIC_RES, "35")) %>%
+    filter(str_starts(MUNIC_RES, "35"))
   
   # Converter para data.table (menos memória)
   setDT(df)
@@ -68,7 +60,12 @@ df_final <- rbindlist(
   fill = TRUE
 )
 
-write.csv2(df_quedas, "C:\\R\\DCNT\\sih_quedas.csv", row.names = FALSE)
+df_final$MUNIC_RES <- as.character(df_final$MUNIC_RES)
+
+df_final <- df_final %>%
+  filter(str_starts(MUNIC_RES, '35'))
+
+freq(df_final$MUNIC_RES)
 
 cols_cid <- c("DIAG_PRINC", "DIAG_SECUN", "DIAGSEC1", "DIAGSEC2", "DIAGSEC3",
               "DIAGSEC4", "DIAGSEC5", "DIAGSEC6", "DIAGSEC7", "DIAGSEC8", "DIAGSEC9")
@@ -80,3 +77,9 @@ df_quedas <- df_final %>%
       ~grepl("^W(0[0-9|1[0-9])", .x)
     )
   )
+
+df1 <- process_sih(df_quedas)
+
+freq(df_final$MUNIC_RES)
+
+write.csv2(df1, "C:\\R\\DCNT\\sih_quedas.csv", row.names = FALSE)
