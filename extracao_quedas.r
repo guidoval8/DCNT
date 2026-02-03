@@ -12,7 +12,7 @@ freq(SIH15$DT_INTER)
 
 names(SIH15)
 
-colunas <- c("UF_ZI" ,"N_AIH", "SEXO" , "DT_INTER", "VAL_TOT", "DIAG_PRINC", "DIAG_SECUN", "COD_IDADE", "IDADE", "MORTE",
+colunas <- c("MUNIC_RES" ,"N_AIH", "SEXO" , "DT_INTER", "VAL_TOT", "DIAG_PRINC", "DIAG_SECUN", "COD_IDADE", "IDADE", "MORTE",
              "DIAGSEC1","DIAGSEC2","DIAGSEC3","DIAGSEC4","DIAGSEC5","DIAGSEC6","DIAGSEC7","DIAGSEC8" ,"DIAGSEC9")
 
 T1 <- sih %>%
@@ -37,7 +37,8 @@ for (arq in arquivos) {
   df <- read.dbc(arq) |>
     process_sih() |>
     select(any_of(colunas)) |>
-    filter(IDADE >= 60)
+    filter(IDADE >= 60) %>%
+    filter(str_starts(MUNIC_RES, "35")) %>%
   
   # Converter para data.table (menos memória)
   setDT(df)
