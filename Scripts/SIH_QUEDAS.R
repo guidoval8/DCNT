@@ -64,7 +64,7 @@ for (ano in anos) {
 
 df_quedas_final <- bind_rows(lista_quedas)
 
-write.csv2(df_quedas_final, "C:\\R\\DCNT\\SIH\\sih_quedas.csv", na="", row.names = FALSE)
+#write.csv2(df_quedas_final, "C:\\R\\DCNT\\SIH\\sih_quedas.csv", na="", row.names = FALSE)
 
 #-----------------#
 
@@ -96,6 +96,8 @@ for (ano in anos_baixar) {
     print(paste("Lendo:", nome_dbf))
     df_ano_atual <- read.dbf(nome_dbf)
     
+    names(df_ano_atual) <- toupper(names(df_ano_atual))
+    
     # Adiciona o dataframe lido à nossa lista
     lista_pop_bruta[[as.character(ano)]] <- df_ano_atual
     
@@ -117,8 +119,6 @@ df_ano_atual <- NULL
 #Taxa de internações de idosos por quedas acidentais (N de internaçoes por mil habitantes)
 #Valor total e médio das internações de idosos por quedas acidentais
 #Taxa de mortalidade hospitalar por quedas acidentais entre idosos
-
-sih_quedas <- import("https://github.com/guidoval8/DCNT/blob/main/dados/sih_quedas.csv?raw=true")
 
 sih_quedas <- df_quedas_final %>%
   mutate(ANO = year(DT_INTER)) %>%
