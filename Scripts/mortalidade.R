@@ -40,7 +40,11 @@ SIM_CID <- SIM %>%
     CAUSABAS = str_trim(toupper(as.character(CAUSABAS))),
     CID3 = str_sub(CAUSABAS, 1,3)
   )
+
 #----#
+SIM <- NULL
+#----#
+
 SIM_padrao <- SIM_CID %>%
   #Filtrar idade
   mutate(IDADEanos = as.numeric(IDADEanos)) %>%
@@ -147,6 +151,8 @@ for (ano in anos_baixar) {
     print(paste("Lendo:", nome_dbf))
     df_ano_atual <- read.dbf(nome_dbf)
     
+    names(df_ano_atual) <- toupper(names(df_ano_atual))
+    
     #Adiciona o dataframe lido a lista
     lista_pop_bruta[[as.character(ano)]] <- df_ano_atual
     
@@ -162,12 +168,13 @@ pop_bruta_total <- bind_rows(lista_pop_bruta)
 
 #CLASSIFICAÇÃO DE FAIXA ETÁRIA
 DENOMINADOR <- pop_bruta_total %>%
+  mutate(IDADE = as.numeric(IDADE)) %>%
   mutate(
     FAIXA_ETARIA = case_when(
-      IDADE == "030" | IDADE == "035" ~ "30-39 anos",
-      IDADE == "040" | IDADE == "045" ~ "40-49 anos",
-      IDADE == "050" | IDADE == "055" ~ "50-59 anos",
-      IDADE == "060" | IDADE == "065" ~ "60-69 anos",
+      IDADE >= 30 & IDADE < 40 ~ "30-39 anos",
+      IDADE >= 40 & IDADE < 50 ~ "40-49 anos",
+      IDADE >= 50 & IDADE < 60 ~ "50-59 anos",
+      IDADE >= 60 & IDADE < 70 ~ "60-69 anos",
       TRUE ~ NA_character_
     )
   ) %>%
