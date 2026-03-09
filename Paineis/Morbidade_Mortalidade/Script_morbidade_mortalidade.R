@@ -1173,7 +1173,10 @@ geo_estado <- data.frame(
 #Empilhar o esqueleto geográfico (645 Mun + RS + RRAS + Estado)
 geo_completa <- bind_rows(geo_mun, geo_rs, geo_rras, geo_estado)
 
-anos_unicos <- 2015:ano_atual
+#fixar último ano com dados
+ultimo_ano <- max(t2$ANO, na.rm = TRUE)
+
+anos_unicos <- 2015:ultimo_ano
 sexos_unicos <- c("Masculino", "Feminino", "Total")
 
 grupos_dcnt_unicos <- unique(c(
@@ -1260,3 +1263,5 @@ write.csv2(dcnt_d_localidade, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt
 write.csv2(dcnt_d_agravo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_agravo.csv", row.names = FALSE)
 write.csv2(dcnt_d_tempo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_tempo.csv", row.names = FALSE)
 write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_f_indicadores.csv", row.names = FALSE)
+
+gc()
