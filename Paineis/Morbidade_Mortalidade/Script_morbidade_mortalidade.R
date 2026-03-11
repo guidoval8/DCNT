@@ -453,6 +453,7 @@ estado_bi_padronizado <- estado_bi %>%
     ID_Localidade = '35',
     Nome_Localidade = 'Estado de São Paulo',
     ANOOBITO, SEXO, GRUPO_DCNT,
+    obitos_sim = total_obito_estado,
     Taxa_Padronizada = taxa_padronizada_estado,
     Taxa_Bruta = taxa_bruta_estado
   )
@@ -464,6 +465,7 @@ rras_bi_padronizado <- rras_bi %>%
     ID_Localidade = RRAS_2025,
     Nome_Localidade = RRAS_2025,
     ANOOBITO, SEXO, GRUPO_DCNT,
+    obitos_sim = total_obito_rras,
     Taxa_Padronizada = taxa_padronizada_rras,
     Taxa_Bruta = taxa_bruta_rras
   )
@@ -475,6 +477,7 @@ rs_bi_padronizado <- rs_bi %>%
     ID_Localidade = NOME_RS_2025,
     Nome_Localidade = NOME_RS_2025,
     ANOOBITO, SEXO, GRUPO_DCNT,
+    obitos_sim = total_obito_rs,
     Taxa_Padronizada = taxa_padronizada_rs,
     Taxa_Bruta = taxa_bruta_rs
   )
@@ -487,6 +490,7 @@ mun_bi_padronizado <- mun_bi %>%
     ID_Localidade = CODMUNRES,
     Nome_Localidade = Nome_Municipio,
     ANOOBITO, SEXO, GRUPO_DCNT,
+    obitos_sim = total_obito_mun,
     Taxa_Padronizada = taxa_padronizada_100mil,
     Taxa_Bruta = taxa_bruta_mun
   )
@@ -506,13 +510,14 @@ tabela_mestra_mortalidade <- bind_rows(
 
 taxa_base_2015 <- tabela_mestra_mortalidade %>%
   filter(ANOOBITO == 2015) %>%
+  select(-obitos_sim) %>%
   rename(Taxa_Padronizada_2015 = Taxa_Padronizada)
 
 mestra_base_2015 <- left_join(
   tabela_mestra_mortalidade,
   taxa_base_2015,
   by = c("Nivel_Geografico","ID_Localidade","Nome_Localidade","SEXO","GRUPO_DCNT" )) %>%
-  select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","Taxa_Padronizada_2015", "Taxa_Padronizada", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
+  select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","obitos_sim","Taxa_Padronizada_2015", "Taxa_Padronizada", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
   rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
 
 #Aplica a lógica condicional para a meta de redução
@@ -533,7 +538,7 @@ mestra_mortalidade <- mestra_base_2015 %>%
     taxa_padronizada_esperada_meta = Taxa_Padronizada_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
   ) %>%
   select(
-    "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT",
+    "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT","obitos_sim",
     "Taxa_Padronizada", "Taxa_Padronizada_2015","taxa_padronizada_esperada_meta","Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta"
   )
 
@@ -771,7 +776,7 @@ for (ano in anos) {
 
 df_dcnt_final <- bind_rows(lista_dcnt)
 
-#write.csv2(df_dcnt_final, "C:\\R\\DCNT\\SIH\\sih_dcnt.csv", row.names = FALSE)
+write.csv2(df_dcnt_final, "C:\\R\\DCNT\\SIH\\sih_dcnt.csv", row.names = FALSE)
 
 #--------------------------#
 
@@ -1103,7 +1108,8 @@ mortalidade_estado <- sih_geo %>%
   mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
   mutate(nivel_geografico = "Estado de São Paulo") %>% mutate(NOME = "Estado de São Paulo")
 
-tabela_mestra_sih_mortalidade <- rbind(mortalidade_municipio, mortalidade_rs, mortalidade_rras, mortalidade_estado)
+tabela_mestra_sih_mortalidade <- rbind(mortalidade_municipio, mortalidade_rs, mortalidade_rras, mortalidade_estado) %>%
+  rename(obitos_sih = obitos)
 
 #FINAL
 chaves_join <- c("ANO", "NOME", "nivel_geografico", "GRUPO_DCNT")
@@ -1112,6 +1118,8 @@ mestra_sih_dcnt <- tabela_mestra_taxa %>%
   left_join(tabela_mestra_valor %>% select(-n_internacoes), by = chaves_join) %>%
   
   left_join(tabela_mestra_sih_mortalidade %>% select(-n_internacoes), by = chaves_join)
+
+write.csv2(mestra_sih_dcnt, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\mestra_sih_mortalidade.csv", row.names = FALSE)
 
 #--------------------#
 #----Padronização----#
@@ -1194,9 +1202,9 @@ esqueleto_bi <- expand_grid(
 
 #Limpar inconsistências lógicas do esqueleto
 esqueleto_bi <- esqueleto_bi %>%
-  # Remover câncer de mama e colo de útero para homens ou 'Total'
+  #Remover câncer de mama e colo de útero para homens ou 'Total'
   filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino'))
-  # filter(!(GRUPO_DCNT %in% c('CSAP_HAS_DM', 'Hipertensao', 'DIC', 'AVC') & SEXO != 'Total'))
+  #filter(!(GRUPO_DCNT %in% c('CSAP_HAS_DM', 'Hipertensao', 'DIC', 'AVC') & SEXO != 'Total'))
 
 tabela_final_power_bi <- esqueleto_bi %>%
   left_join(t2, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT"))
@@ -1204,8 +1212,23 @@ tabela_final_power_bi <- esqueleto_bi %>%
 #Transformar os NAs em 0 nas colunas de métricas
 tabela_final_power_bi <- tabela_final_power_bi %>%
   mutate(across(
-    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), "OBITOS", "POP", "N_INTERNACOES"), 
+    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), contains("OBITOS"), "POP", "N_INTERNACOES"), 
     .fns = ~replace_na(.x, 0)
+  )) %>% #Formatar o nome das DCNT
+  mutate(GRUPO_DCNT = case_when(
+    GRUPO_DCNT == "Cancer" ~ "Câncer (C00-C97)",
+    GRUPO_DCNT == "Cancer de Colo de Utero" ~ "Câncer de colo de útero (C53)",
+    GRUPO_DCNT == "Cancer de Mama" ~ "Câncer de mama (C50)",
+    GRUPO_DCNT == "Cancer do Aparelho Digestivo" ~ "Câncer de aparelho digestivo (C15-C25...)",
+    GRUPO_DCNT == "Circulatorio" ~ "Doenças do aparelho circulatório (I00-I99)",
+    GRUPO_DCNT == "Respiratoria" ~ "Doenças respiratórias crônicas (J30-J98)",
+    GRUPO_DCNT == "Diabetes" ~ "Diabetes mellitus (E10-E14)",
+    GRUPO_DCNT == "Hipertensao" ~ "Hipertensão arterial (I10-I14)",
+    GRUPO_DCNT == "CSAP_HAS_DM" ~ "Condições sensíveis à atenção primária em saúde",
+    GRUPO_DCNT == "Todas_DCNT" ~ "Todas as DCNT",
+    GRUPO_DCNT == "AVC" ~ "AVC (I60-I69)",
+    GRUPO_DCNT == "DIC" ~ "DIC (I20-I25)",
+    TRUE ~ GRUPO_DCNT
   ))
 
 #--------------------------------------------------#
@@ -1241,6 +1264,7 @@ dcnt_f_indicadores <- tabela_final_power_bi %>%
     ID_AGRAVO, 
     ID_TEMPO, 
     SEXO,
+    OBITOS_SIM,
     TAXA_PADRONIZADA,
     TAXA_PADRONIZADA_2015,
     TAXA_PADRONIZADA_ESPERADA_META,
@@ -1255,7 +1279,7 @@ dcnt_f_indicadores <- tabela_final_power_bi %>%
     TAXA_BRUTA_INTERNACAO,
     VALOR_TOTAL,
     VALOR_MEDIO,
-    OBITOS,
+    OBITOS_SIH,
     TAXA_MORTALIDADE
   )
 
@@ -1264,4 +1288,10 @@ write.csv2(dcnt_d_agravo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_a
 write.csv2(dcnt_d_tempo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_tempo.csv", row.names = FALSE)
 write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_f_indicadores.csv", row.names = FALSE)
 
-gc()
+#Limpar memória
+manter <- c(
+  "mestra_mortalidade", "tabela_mestra_mortalidade", "tabela_mestra_probabilidade", "mestra_probabilidade",
+  "tabela_final_power_bi", "esqueleto_bi", "t1", "t2"
+)
+
+rm(list = setdiff(ls(), manter))
