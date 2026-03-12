@@ -276,19 +276,20 @@ taxa_padronizada_mun <- df_OE %>%
   )
 
 #----ESTADO----#
-estado_bruto <- df_taxas %>%
+pop_estado_sim <- DENOMINADOR %>%
+  group_by(ANOOBITO, SEXO, FAIXA_ETARIA) %>%
+  summarise(total_pop_estado = sum(populacao, na.rm = TRUE)) %>%
+  ungroup()
+
+obitos_estado <- NUMERADOR_SIM %>%
   group_by(ANOOBITO, SEXO, GRUPO_DCNT, FAIXA_ETARIA) %>%
-  summarise(
-    total_obito_estado = sum(obitos, na.rm = TRUE),
-    total_pop_estado = sum(populacao, na.rm=TRUE)
-  ) %>%
+  summarise(total_obito_estado = sum(obitos, na.rm = TRUE)) %>%
   ungroup()
 
 #Taxa específica ESTADO
-estado_taxa_especifica <- estado_bruto %>%
-  mutate(
-    taxa_especifica_estado = total_obito_estado / total_pop_estado
-  )
+estado_taxa_especifica <- obitos_estado %>%
+  left_join(pop_estado_sim, by = c("ANOOBITO", "SEXO", "FAIXA_ETARIA")) %>%
+  mutate(taxa_especifica_estado = total_obito_estado / total_pop_estado)
 
 #Juntar com pop padrão
 estado_padrao <- left_join(estado_taxa_especifica, pop_padrao_2010, by = 'FAIXA_ETARIA')
@@ -384,7 +385,7 @@ taxa_padronizada_rs <- RS_oe %>%
 #-----------------------------------------------------------------#
 
 #Estado
-taxa_bruta_estado <- estado_bruto %>%
+taxa_bruta_estado <- estado_taxa_especifica %>%
   group_by(ANOOBITO, SEXO, GRUPO_DCNT) %>%
   summarise(
     total_obito_estado = sum(total_obito_estado, na.rm=TRUE),
@@ -454,6 +455,7 @@ estado_bi_padronizado <- estado_bi %>%
     Nome_Localidade = 'Estado de São Paulo',
     ANOOBITO, SEXO, GRUPO_DCNT,
     obitos_sim = total_obito_estado,
+    POP_SIM = total_pop_estado,
     Taxa_Padronizada = taxa_padronizada_estado,
     Taxa_Bruta = taxa_bruta_estado
   )
@@ -466,6 +468,7 @@ rras_bi_padronizado <- rras_bi %>%
     Nome_Localidade = RRAS_2025,
     ANOOBITO, SEXO, GRUPO_DCNT,
     obitos_sim = total_obito_rras,
+    POP_SIM = total_pop_rras,
     Taxa_Padronizada = taxa_padronizada_rras,
     Taxa_Bruta = taxa_bruta_rras
   )
@@ -478,6 +481,7 @@ rs_bi_padronizado <- rs_bi %>%
     Nome_Localidade = NOME_RS_2025,
     ANOOBITO, SEXO, GRUPO_DCNT,
     obitos_sim = total_obito_rs,
+    POP_SIM = total_pop_rs,
     Taxa_Padronizada = taxa_padronizada_rs,
     Taxa_Bruta = taxa_bruta_rs
   )
@@ -491,6 +495,7 @@ mun_bi_padronizado <- mun_bi %>%
     Nome_Localidade = Nome_Municipio,
     ANOOBITO, SEXO, GRUPO_DCNT,
     obitos_sim = total_obito_mun,
+    POP_SIM = total_pop_mun,
     Taxa_Padronizada = taxa_padronizada_100mil,
     Taxa_Bruta = taxa_bruta_mun
   )
@@ -510,15 +515,16 @@ tabela_mestra_mortalidade <- bind_rows(
 
 taxa_base_2015 <- tabela_mestra_mortalidade %>%
   filter(ANOOBITO == 2015) %>%
-  select(-obitos_sim) %>%
-  rename(Taxa_Padronizada_2015 = Taxa_Padronizada)
+  select(Nivel_Geografico, ID_Localidade, Nome_Localidade, SEXO, GRUPO_DCNT,
+         Taxa_Padronizada_2015 = Taxa_Padronizada,
+         Taxa_Bruta_2015 = Taxa_Bruta)
+  
 
 mestra_base_2015 <- left_join(
-  tabela_mestra_mortalidade,
-  taxa_base_2015,
-  by = c("Nivel_Geografico","ID_Localidade","Nome_Localidade","SEXO","GRUPO_DCNT" )) %>%
-  select("Nivel_Geografico","ID_Localidade","Nome_Localidade","ANOOBITO.x","SEXO","GRUPO_DCNT","obitos_sim","Taxa_Padronizada_2015", "Taxa_Padronizada", "Taxa_Bruta.x", "Taxa_Bruta.y") %>%
-  rename("ANOOBITO" = "ANOOBITO.x", "Taxa_Bruta" = "Taxa_Bruta.x" , "Taxa_Bruta_2015" = "Taxa_Bruta.y")
+    tabela_mestra_mortalidade,
+    taxa_base_2015,
+    by = c("Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "SEXO", "GRUPO_DCNT")
+  )
 
 #Aplica a lógica condicional para a meta de redução
 
@@ -538,9 +544,10 @@ mestra_mortalidade <- mestra_base_2015 %>%
     taxa_padronizada_esperada_meta = Taxa_Padronizada_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
   ) %>%
   select(
-    "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT","obitos_sim",
+    "Nivel_Geografico", "ID_Localidade", "Nome_Localidade", "ANOOBITO", "SEXO", "GRUPO_DCNT","obitos_sim", "POP_SIM",
     "Taxa_Padronizada", "Taxa_Padronizada_2015","taxa_padronizada_esperada_meta","Taxa_Bruta", "Taxa_Bruta_2015", "taxa_esperada_meta"
-  )
+  ) %>%
+  filter(POP_SIM != 0)
 
 #Limpar memória
 manter <- c(
@@ -1145,7 +1152,8 @@ mestra_probabilidade <- mestra_probabilidade %>%
 names(mestra_sih_dcnt) <- toupper(names(mestra_sih_dcnt))
 
 mestra_sih_dcnt <- mestra_sih_dcnt %>%
-  mutate(SEXO = "Total")
+  mutate(SEXO = "Total") %>%
+  rename(POP_SIH = POP)
 
 #----UNIFICAÇÃO----#
 t1 <- mestra_mortalidade %>%
@@ -1212,7 +1220,7 @@ tabela_final_power_bi <- esqueleto_bi %>%
 #Transformar os NAs em 0 nas colunas de métricas
 tabela_final_power_bi <- tabela_final_power_bi %>%
   mutate(across(
-    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), contains("OBITOS"), "POP", "N_INTERNACOES"), 
+    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), contains("OBITOS"), contains("POP"), "N_INTERNACOES"), 
     .fns = ~replace_na(.x, 0)
   )) %>% #Formatar o nome das DCNT
   mutate(GRUPO_DCNT = case_when(
@@ -1265,6 +1273,7 @@ dcnt_f_indicadores <- tabela_final_power_bi %>%
     ID_TEMPO, 
     SEXO,
     OBITOS_SIM,
+    POP_SIM,
     TAXA_PADRONIZADA,
     TAXA_PADRONIZADA_2015,
     TAXA_PADRONIZADA_ESPERADA_META,
@@ -1275,7 +1284,7 @@ dcnt_f_indicadores <- tabela_final_power_bi %>%
     PROBABILIDADE_2015,
     PROB_ESPERADA_META,
     N_INTERNACOES,
-    POP,
+    POP_SIH,
     TAXA_BRUTA_INTERNACAO,
     VALOR_TOTAL,
     VALOR_MEDIO,
@@ -1287,11 +1296,6 @@ write.csv2(dcnt_d_localidade, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt
 write.csv2(dcnt_d_agravo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_agravo.csv", row.names = FALSE)
 write.csv2(dcnt_d_tempo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_tempo.csv", row.names = FALSE)
 write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_f_indicadores.csv", row.names = FALSE)
+write.xlsx(tabela_final_power_bi, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\morbidade_mortalidade.xlsx")
 
-#Limpar memória
-manter <- c(
-  "mestra_mortalidade", "tabela_mestra_mortalidade", "tabela_mestra_probabilidade", "mestra_probabilidade",
-  "tabela_final_power_bi", "esqueleto_bi", "t1", "t2"
-)
-
-rm(list = setdiff(ls(), manter))
+gc()
