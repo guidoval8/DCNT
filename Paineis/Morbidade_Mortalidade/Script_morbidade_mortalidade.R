@@ -1155,13 +1155,6 @@ mestra_sih_dcnt <- mestra_sih_dcnt %>%
   mutate(SEXO = "Total") %>%
   rename(POP_SIH = POP)
 
-#----UNIFICAÇÃO----#
-t1 <- mestra_mortalidade %>%
-  left_join(mestra_probabilidade, by = c("NIVEL_GEOGRAFICO","NOME","ANO", "SEXO", "GRUPO_DCNT"))
-
-t2 <- t1 %>%
-  left_join(mestra_sih_dcnt, by = c("NIVEL_GEOGRAFICO","NOME","ANO", "SEXO", "GRUPO_DCNT"))
-
 #------------#
 #----GRID----#
 #------------#
@@ -1190,7 +1183,7 @@ geo_estado <- data.frame(
 geo_completa <- bind_rows(geo_mun, geo_rs, geo_rras, geo_estado)
 
 #fixar último ano com dados
-ultimo_ano <- max(t2$ANO, na.rm = TRUE)
+ultimo_ano <- max(mestra_mortalidade$ANO, na.rm = TRUE)
 
 anos_unicos <- 2015:ultimo_ano
 sexos_unicos <- c("Masculino", "Feminino", "Total")
@@ -1215,7 +1208,9 @@ esqueleto_bi <- esqueleto_bi %>%
   #filter(!(GRUPO_DCNT %in% c('CSAP_HAS_DM', 'Hipertensao', 'DIC', 'AVC') & SEXO != 'Total'))
 
 tabela_final_power_bi <- esqueleto_bi %>%
-  left_join(t2, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT"))
+  left_join(mestra_mortalidade, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT")) %>%
+  left_join(mestra_probabilidade, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT")) %>%
+  left_join(mestra_sih_dcnt, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT"))
 
 #Transformar os NAs em 0 nas colunas de métricas
 tabela_final_power_bi <- tabela_final_power_bi %>%
@@ -1299,3 +1294,4 @@ write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcn
 write.xlsx(tabela_final_power_bi, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\morbidade_mortalidade.xlsx")
 
 gc()
+a
