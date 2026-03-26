@@ -70,7 +70,7 @@ SIM_grupos <- SIM_padrao %>%
 SIM_cancer_todos <- SIM_padrao %>%
   mutate(
     GRUPO_DCNT = case_when(
-      CAUSABAS >= 'C00' & CAUSABAS <= 'C97' ~ 'Cancer'
+      CID3 >= 'C00' & CID3 <= 'C97' ~ 'Cancer'
     ) 
   ) %>%
   filter(GRUPO_DCNT == 'Cancer')
@@ -79,10 +79,10 @@ SIM_cancer_todos <- SIM_padrao %>%
 SIM_todas <- SIM_padrao %>%
   mutate(
     GRUPO_DCNT = case_when(
-      (CAUSABAS >= 'I00' & CAUSABAS <= 'I99') |
-        (CAUSABAS >= 'C00' & CAUSABAS <= 'C97') |
-        (CAUSABAS >= 'E10' & CAUSABAS <= 'E14') |
-        ((CAUSABAS >= 'J30' & CAUSABAS <= 'J98') & (CAUSABAS != 'J36')) ~ "Todas_DCNT",
+      (CID3 >= 'I00' & CID3 <= 'I99') |
+        (CID3 >= 'C00' & CID3 <= 'C97') |
+        (CID3 >= 'E10' & CID3 <= 'E14') |
+        ((CID3 >= 'J30' & CID3 <= 'J98') & (CID3 != 'J36')) ~ "Todas_DCNT",
       TRUE ~ NA_character_
     )
   ) %>%
@@ -920,8 +920,18 @@ sih_avc <- df_dcnt_final %>%
   ) %>%
   filter(GRUPO_DCNT == 'AVC')
 
+# AVC e DIC
+sih_dic_avc <- df_dcnt_final %>%
+  mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
+  mutate(
+    GRUPO_DCNT= case_when(
+      (CID3 >= 'I20' & CID3 <= 'I25') | (CID3 >= 'I60' & CID3 <= 'I69') ~ 'DIC_AVC'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == "DIC_AVC")
+
 #EMPILHAR AS CLASSIFICAÇÕES
-sih <- rbind(sih_dcnt, sih_cancer_todos, sih_todas, sih_hipertensao, sih_csap_has_dm, sih_dic, sih_avc)
+sih <- rbind(sih_dcnt, sih_cancer_todos, sih_todas, sih_hipertensao, sih_csap_has_dm, sih_dic, sih_avc,sih_dic_avc)
 
 #limpando a RAM
 sih_dcnt <- NULL
@@ -1079,7 +1089,10 @@ mortalidade_municipio <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
+  mutate(taxa_mortalidade = case_when(
+    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
+    TRUE ~ NA_real_
+  )) %>%
   mutate(nivel_geografico = "Município") %>% rename(NOME = MUNICIPIO)
 
 # RS
@@ -1090,7 +1103,10 @@ mortalidade_rs <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
+  mutate(taxa_mortalidade = case_when(
+    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
+    TRUE ~ NA_real_
+  )) %>%
   mutate(nivel_geografico = "Região de Saúde") %>% rename(NOME = NOME_RS_2025)
 
 # RRAS
@@ -1101,7 +1117,10 @@ mortalidade_rras <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
+  mutate(taxa_mortalidade = case_when(
+    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
+    TRUE ~ NA_real_
+  )) %>%
   mutate(nivel_geografico = "RRAS") %>% rename(NOME = RRAS_2025)
 
 # Estado
@@ -1112,7 +1131,10 @@ mortalidade_estado <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
+  mutate(taxa_mortalidade = case_when(
+    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
+    TRUE ~ NA_real_
+  )) %>%
   mutate(nivel_geografico = "Estado de São Paulo") %>% mutate(NOME = "Estado de São Paulo")
 
 tabela_mestra_sih_mortalidade <- rbind(mortalidade_municipio, mortalidade_rs, mortalidade_rras, mortalidade_estado) %>%
@@ -1215,7 +1237,7 @@ tabela_final_power_bi <- esqueleto_bi %>%
 #Transformar os NAs em 0 nas colunas de métricas
 tabela_final_power_bi <- tabela_final_power_bi %>%
   mutate(across(
-    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), contains("OBITOS"), contains("POP"), "N_INTERNACOES"), 
+    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), contains("OBITOS"), contains("POP"), "N_INTERNACOES", -TAXA_MORTALIDADE), 
     .fns = ~replace_na(.x, 0)
   )) %>% #Formatar o nome das DCNT
   mutate(GRUPO_DCNT = case_when(
@@ -1231,6 +1253,7 @@ tabela_final_power_bi <- tabela_final_power_bi %>%
     GRUPO_DCNT == "Todas_DCNT" ~ "Todas as DCNT",
     GRUPO_DCNT == "AVC" ~ "AVC (I60-I69)",
     GRUPO_DCNT == "DIC" ~ "DIC (I20-I25)",
+    GRUPO_DCNT == "DIC_AVC" ~ "Mortalidade Hospitalar por DIC e AVC",
     TRUE ~ GRUPO_DCNT
   ))
 
@@ -1290,8 +1313,7 @@ dcnt_f_indicadores <- tabela_final_power_bi %>%
 write.csv2(dcnt_d_localidade, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_localidade.csv", row.names = FALSE)
 write.csv2(dcnt_d_agravo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_agravo.csv", row.names = FALSE)
 write.csv2(dcnt_d_tempo, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_d_tempo.csv", row.names = FALSE)
-write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_f_indicadores.csv", row.names = FALSE)
+write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcnt_f_indicadores.csv", row.names = FALSE, na = "")
 write.xlsx(tabela_final_power_bi, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\morbidade_mortalidade.xlsx")
 
 gc()
-a
