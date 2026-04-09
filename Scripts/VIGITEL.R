@@ -7,11 +7,168 @@ library(janitor)
 library(summarytools)
 library(openxlsx)
 library(gmodels)
+library(purrr)
+library(srvyr)
+library(tibble)
 
 #----IMPORTANDO BASE----#
 df <- read_xlsx("C:\\R\\DCNT\\VIGITEL\\BD_Vigitel-SP_16-12-2021.xlsx") 
 
 names(df) <- toupper(names(df))
+
+#-----------------------------------------------------#
+#-----PRÉ-PROCESSAMENTO: IMPUTAÇÃO DE ESCOLARIDADE----#
+#-----------------------------------------------------#
+
+#arquivo 2021 que recebi ja foi feita imputação!
+
+df <- df %>%
+  mutate(
+    Q8_ANOS_ORIG = Q8_ANOS,
+    
+    #Faixa etária auxiliar da imputação
+    fet = case_when(
+      Q6 >= 18 & Q6 < 25 ~ 1,
+      Q6 >= 25 & Q6 < 35 ~ 2,
+      Q6 >= 35 & Q6 < 45 ~ 3,
+      Q6 >= 45 & Q6 < 55 ~ 4,
+      Q6 >= 55 & Q6 < 65 ~ 5,
+      Q6 >= 65 & Q6 < 150 ~ 6,
+      TRUE ~ NA_real_
+    ),
+    
+    #Células de imputação: sexo + faixa etária
+    cat_esc = case_when(
+      Q7 == 1 & fet == 1 ~ 1,
+      Q7 == 1 & fet == 2 ~ 2,
+      Q7 == 1 & fet == 3 ~ 3,
+      Q7 == 1 & fet == 4 ~ 4,
+      Q7 == 1 & fet == 5 ~ 5,
+      Q7 == 1 & fet == 6 ~ 6,
+      Q7 == 2 & fet == 1 ~ 7,
+      Q7 == 2 & fet == 2 ~ 8,
+      Q7 == 2 & fet == 3 ~ 9,
+      Q7 == 2 & fet == 4 ~ 10,
+      Q7 == 2 & fet == 5 ~ 11,
+      Q7 == 2 & fet == 6 ~ 12,
+      TRUE ~ NA_real_
+    )
+  ) %>%
+  group_by(REGIAO, cat_esc) %>%
+  mutate(
+    #Média de Q8_ANOS de cada regiao + cat_esc
+    Q8_ANOS_m = mean(Q8_ANOS, na.rm = TRUE)
+  ) %>%
+  ungroup() %>%
+  mutate(
+    #Se a média do grupo for NA, transforma em NA
+    Q8_ANOS_m = if_else(is.nan(Q8_ANOS_m), NA_real_, Q8_ANOS_m),
+    
+    #Imputa apenas os missings de Q8_ANOS com a média truncada
+    Q8_ANOS = if_else(is.na(Q8_ANOS), trunc(Q8_ANOS_m), Q8_ANOS),
+    
+    #Faixa de escolaridade em 3 categorias
+    fesc = case_when(
+      Q8_ANOS >= 0 & Q8_ANOS < 9 ~ 1,
+      Q8_ANOS >= 9 & Q8_ANOS < 12 ~ 2,
+      Q8_ANOS >= 12 & Q8_ANOS < 30 ~ 3,
+      TRUE ~ NA_real_
+    ),
+    #Faixa de escolaridade usada no rake
+    fxesc = case_when(
+      Q8_ANOS >= 0  & Q8_ANOS < 8  ~ 1,
+      Q8_ANOS >= 8  & Q8_ANOS < 11 ~ 2,
+      Q8_ANOS >= 11 & Q8_ANOS < 15 ~ 3,
+      Q8_ANOS >= 15 & Q8_ANOS <= 20 ~ 4,
+      TRUE ~ NA_real_
+    )
+  )
+
+#-----------------------------------------------------#
+#-----PRÉ-PROCESSAMENTO: RECLASSIFICAÇÃO DO Q69-------#
+#-----------------------------------------------------#
+
+#TABELA AUXILIAR
+q69_aux <- tribble(
+  ~Q69_OU,                 ~Q69_OU_CLASS,
+  "AZUL",                  0,
+  "CALCAZIANO",            0,
+  "CANELA",                0,
+  "CLARA",                 0,
+  "CLARA LOIRA",           0,
+  "CLARO",                 0,
+  "COR DE JAMBO",          0,
+  "LOIRO",                 0,
+  "MERENA CLARA",          4,
+  "MOREDO",                4,
+  "MORENA",                4,
+  "MORENA CLARA",          4,
+  "MORENA BEM CLARINHA",   4,
+  "MORENA CANELA",         4,
+  "MORENA CLARO",          4,
+  "MORENA ESCURA",         4,
+  "MORENA ESCURO",         4,
+  "MORENA PARA BRANCA",    4,
+  "MORENA PARDA",          4,
+  "MORENINHO",             4,
+  "MORENO",                4,
+  "MORENO CLARO",          4,
+  "MORENO ESCURO",         4,
+  "MORENO JAMBO",          4,
+  "MORENO MEIO AMARELO",   4,
+  "MORNENA",               4,
+  "MRENO CASTANHO",        4,
+  "MULATA",                4,
+  "NEGRA",                 2,
+  "NEGRO",                 2,
+  "NORENA CLARA",          4,
+  "ROSADO",                0,
+  "RUIVA",                 0,
+  "AMARELA",               0,
+  "BEGE",                  0,
+  "ITALIANO",              0,
+  "MORENO CHOCOLATE",      4,
+  "MORENINHO BONITO",      0,
+  "RUIVO",                 0
+)
+
+#Limpando o q69_outros
+df <- df %>%
+  mutate(
+    Q69_ORIG = Q69,
+    Q69_OU = as.character(Q69_OU),
+    Q69_OU = trimws(Q69_OU),
+    Q69_OU = toupper(Q69_OU),
+    Q69_OU = gsub("\\s+", " ", Q69_OU)
+  )
+
+q69_aux <- q69_aux %>%
+  mutate(Q69_OU = as.character(Q69_OU))
+
+df <- df %>%
+  left_join(q69_aux, by = "Q69_OU") %>%
+  mutate(
+    #Guarda o original
+    Q69_ORIG = Q69,
+    
+    #Se houver código 0 no vetor, transforma em ausente
+    Q69_OU_CLASS = na_if(Q69_OU_CLASS, 0)
+  ) %>%
+  #Remove não sabe / não sei informar
+  filter(!Q69 %in% c(777, 888)) %>%
+  mutate(
+    #Reclassifica apenas os "Outros"
+    Q69 = case_when(
+      Q69 == 80 & Q69_OU_CLASS == 2 ~ 2,
+      Q69 == 80 & Q69_OU_CLASS == 4 ~ 4,
+      TRUE ~ Q69
+    ),
+    
+    #Calcula a fração interna do domicílio
+    pinterno = if_else(!is.na(ADULTOS) & ADULTOS > 0, Q71 / ADULTOS, NA_real_)
+  ) %>%
+  #Remove o resto do "Outros" que não classificaram
+  filter(Q69 != 80)
 
 #--------------------------------------#
 #---FAIXA ETÁRIA E ESCOLARIDADE GERAL--#
@@ -64,12 +221,13 @@ df <- df %>%
 #-----------------#
 
 #ARQUIVO 2020 QUE EU TENHO NAO TEM IMPUTAÇÃO (i)
+#PRECISA DOS DADOS DE IMPUTAÇÃO
 
 df <- df %>%
   mutate(
-    Q9_I = coalesce(Q9_I, Q9),
-    Q11_I = coalesce(Q11_I, Q11),
-    imc_i = if_else(Q11 >= 700 | Q9 >= 700, NA_real_, Q9 / ((Q11 / 100)^2)),
+    #Q9_I = coalesce(Q9_I, Q9),
+    #Q11_I = coalesce(Q11_I, Q11),
+    imc_i = if_else(Q11_I >= 700 | Q9_I >= 700, NA_real_, Q9_I / ((Q11_I / 100)^2)),
     excpeso_i = case_when(imc_i >= 25 & imc_i <= 115 ~ 1, TRUE ~ 0),
     obesid_i = case_when(imc_i >= 30 & imc_i <= 115 ~ 1, TRUE ~ 0)
   )
@@ -150,8 +308,8 @@ df <- df %>%
     
     #Recodifica para 2 categorias: 0 a 4 = 0 | 5 a 13 = 1
     score_upp_2cat = if_else(score_upp >= 5, 1, 0)
-  )
-
+  ) 
+  
 #-----------------------#
 #---ATIVIDADE FÍSICA----#
 #-----------------------#
@@ -500,6 +658,12 @@ df <- df %>%
     )
   )
 
+df <- df %>%
+  mutate(
+    SEXO = factor(Q7, levels = c(1, 2), labels = c("Masculino", "Feminino"))
+    ) %>%
+  filter(!is.na(PESORAKE))
+
 write.xlsx(df, "C:\\R\\DCNT\\VIGITEL\\BD_Vigitel_pesorake_indicadores_TESTE.xlsx")
 
 #-----------------------------#
@@ -511,78 +675,102 @@ options(survey.lonely.psu = "adjust")
 
 ### DESIGN ####
 
-# variaveis de delineamento da amostra
-dsn <- svydesign(
-  ids = ~CHAVE,
-  weights = ~PESORAKE,
-  nest = TRUE,
-  data = df)
+#Váriaveis de delineamento da amostra
+dsn <- df %>%
+  as_survey_design(
+  ids = CHAVE,
+  weights = PESORAKE,
+  nest = TRUE)
 
-#Consumo abusivo de bebidas alcoólicas	11
-prev_alcool <- svymean(~alcabu, design = dsn, na.rm = TRUE)
-confint(prev_alcool) * 100
+#----LISTA DE INDICADORES----#
+indicadores <- list(
+  c("obesid_i", "Obesidade em adultos"),
+  c("ativo_livre", "Prevalência da prática de atividade física no tempo livre"),
+  c("flvreco", "Consumo recomendado de frutas e de hortaliças"),
+  c("score_upp_2cat", "Consumo de alimentos ultraprocessados"),
+  c("refritl5",  "Consumo regular de bebidas adoçadas"),
+  c("alcabu", "Consumo abusivo de bebidas alcoólicas"),
+  c("fumante", "Prevalência de tabagismo"),
+  c("hart", "Prevalência de hipertensão arterial"),
+  c("diab", "Prevalência de diabetes mellitus")
+)
 
-  #rras
-  svyby(~alcabu, by = ~RRAS, design = dsn, svymean, na.rm = TRUE)
-  
-  #SEXO (Q7)
-  svyby(~alcabu, by = ~Q7, design = dsn,svymean, na.rm = TRUE)
-  
-  #FAIXA ETARIA
-  svyby(~alcabu, by = ~faixa_etaria, design = dsn,svymean, na.rm = TRUE)
-  
-  #Escolaridade
-  svyby(~alcabu, by = ~escolaridade, design = dsn,svymean, na.rm = TRUE)
+agrupamentos <- list (
+  c(), #Estado de sp 
+  c("SEXO"),
+  c("faixa_etaria"),
+  c("escolaridade"),
+  c("REGIAO"),
+  c("REGIAO", "SEXO"),
+  c("REGIAO", "faixa_etaria"),
+  c("REGIAO", "escolaridade")
+)
 
-#-------#
+#Função Dinâmica de Cálculo de indicadores
+calcular_matriz <- function(ind_info, group_vars) {
+  ind_col <- ind_info[1]
+  ind_label <- ind_info[2]
   
-#Prevalência de tabagismo	11
-prev_fumante <- svymean(~fumante, design = dsn, na.rm = TRUE)
-confint(prev_fumante) * 100
+  #Executa o cálculo
+  if (length(group_vars) == 0) {
+    res <- dsn %>% summarise(prev = survey_mean(.data[[ind_col]], na.rm = TRUE, vartype = "ci"))
+  } else {
+    res <- dsn %>% group_by(across(all_of(group_vars))) %>% 
+      summarise(prev = survey_mean(.data[[ind_col]], na.rm = TRUE, vartype = "ci"))
+  }
+  
+  #Construindo as colunas de texto
+  
+  #Nível Geográfico e Localidade
+  if ("REGIAO" %in% group_vars) {
+    res$Nivel_Geografico <- "REGIAO"
+    res$Localidade <- paste("REGIAO", res$REGIAO)
+  } else {
+    res$Nivel_Geografico <- "Estado de São Paulo"
+    res$Localidade <- "Estado de São Paulo"
+  }
+  
+  #Estratificação e Categoria
+  if ("SEXO" %in% group_vars) {
+    res$Estratificacao <- "Sexo"
+    res$Categoria <- as.character(res$SEXO)
+  } else if ("faixa_etaria" %in% group_vars) {
+    res$Estratificacao <- "Faixa Etária"
+    res$Categoria <- as.character(res$faixa_etaria)
+  } else if ("escolaridade" %in% group_vars) {
+    res$Estratificacao <- "Escolaridade"
+    res$Categoria <- as.character(res$escolaridade)
+  } else {
+    res$Estratificacao <- "Total"
+    res$Categoria <- "Total"
+  }
+  
+  #Formata a tabela final
+  res %>%
+    mutate(
+      Indicador = ind_label,
+      
+      #Calcula a porcentagem e cria o texto do IC95%
+      Prevalencia = round(prev * 100, 1),
+      ic_95_inf = round(prev_low * 100, 1),
+      ic_95_sup = round(prev_upp * 100, 1)
+    ) %>%
+    select(Indicador, Nivel_Geografico, Localidade, Estratificacao, Categoria, Prevalencia, ic_95_inf, ic_95_sup)
+}
 
-  #rras
-  svyby(~fumante, by = ~RRAS, design = dsn,svymean, na.rm = TRUE)
-  
-  #SEXO (Q7)
-  svyby(~fumante, by = ~Q7, design = dsn,svymean, na.rm = TRUE)
-  
-  #FAIXA ETARIA
-  svyby(~fumante, by = ~faixa_etaria, design = dsn,svymean, na.rm = TRUE)
-  
-  #Escolaridade
-  svyby(~fumante, by = ~escolaridade, design = dsn,svymean, na.rm = TRUE)
+#Execução
+tabela_final <- map_dfr(indicadores, function(ind) {
+  map_dfr(agrupamentos, function(grp) {
+    calcular_matriz(ind, grp)
+  })
+})
 
-#Prevalência de hipertensão arterial	11
-prev_hart <- svymean(~hart, design = dsn, na.rm = TRUE)
-confint(prev_hart) * 100
-  
-  #rras
-  svyby(~hart, by = ~RRAS, design = dsn,svymean, na.rm = TRUE)
-  
-  #SEXO (Q7)
-  svyby(~hart, by = ~Q7, design = dsn,svymean, na.rm = TRUE)
-  
-  #FAIXA ETARIA
-  svyby(~hart, by = ~faixa_etaria, design = dsn,svymean, na.rm = TRUE)
-  
-  #Escolaridade
-  svyby(~hart, by = ~escolaridade, design = dsn,svymean, na.rm = TRUE)
+names(tabela_final) <- toupper(names(tabela_final))
 
-#Prevalência de diabetes mellitus	12
-prev_diab <- svymean(~diab, design = dsn, na.rm = TRUE)
-confint(prev_diab) * 100
-  
-  #rras
-  svyby(~diab, by = ~RRAS, design = dsn,svymean, na.rm = TRUE)
-  
-  #SEXO (Q7)
-  svyby(~diab, by = ~Q7, design = dsn,svymean, na.rm = TRUE)
-  
-  #FAIXA ETARIA
-  svyby(~diab, by = ~faixa_etaria, design = dsn,svymean, na.rm = TRUE)
-  
-  #Escolaridade
-  svyby(~diab, by = ~escolaridade, design = dsn,svymean, na.rm = TRUE)
+tabela_final <- tabela_final %>%
+  mutate(NOME = ifelse(is.na(REGIAO), "Estado de São Paulo", REGIAO) 
+  ) %>%
+  select(-REGIAO)
 
-
+write.xlsx(tabela_final, "C:\\R\\DCNT\\VIGITEL\\VIGIEL_2021_TESTE.xlsx")
 
