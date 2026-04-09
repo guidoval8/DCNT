@@ -1317,3 +1317,4 @@ write.csv2(dcnt_f_indicadores, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\dcn
 write.xlsx(tabela_final_power_bi, "C:\\R\\DCNT\\Paineis\\Morbidade_Mortalidade\\morbidade_mortalidade.xlsx")
 
 gc()
+
