@@ -120,6 +120,7 @@ NUMERADOR_SIM <- SIM_filtrado_final %>%
   ) %>%
   ungroup() %>%
   filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino'))
+
 #------------------------------#
 
 #----POPULAÇÃO----#
@@ -222,18 +223,31 @@ DENOMINADOR <- DENOMINADOR %>%
     CODMUNRES = str_sub(CODMUNRES, start = 1L, end = 6L)
   )
 
-#LINKAGE ENTRE OS DADOS
+#----LINKAGE ENTRE OS DADOS----#
+grupo_dcnt_sim <- c(
+  "Cancer",
+  "Cancer de Colo de Utero",
+  "Cancer de Mama",
+  "Cancer do Aparelho Digestivo",
+  "Circulatorio",
+  "Diabetes",
+  "Respiratoria",
+  "Todas_DCNT"
+)
+
+df_sim_completo <- DENOMINADOR %>%
+  tidyr::expand_grid(GRUPO_DCNT = grupo_dcnt_sim) %>%
+  filter(!(GRUPO_DCNT %in% c("Cancer de Mama", "Cancer de Colo de Utero") & SEXO != "Feminino"))
+
 #Chaves de junção
-chaves <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA")
-join <- left_join(NUMERADOR_SIM, DENOMINADOR, by = chaves) %>%
-  filter(!is.na(populacao))
+chaves <- c("CODMUNRES", "ANOOBITO", "SEXO", "FAIXA_ETARIA", "GRUPO_DCNT")
 
 #---Cálculos----# 
-df_taxas <- join %>%
+df_taxas <- df_sim_completo %>%
+  left_join(NUMERADOR_SIM, by = chaves) %>%
   mutate(
-    taxa_bruta_especifica = (obitos / populacao) * 100000
-  ) %>%
-  mutate(
+    obitos = replace_na(obitos, 0),
+    taxa_bruta_especifica = (obitos / populacao) * 100000,
     taxa_bruta_pessoa = obitos / populacao
   )
 
@@ -700,6 +714,21 @@ mestra_probabilidade <- left_join(
     NIVEL_GEOGRAFICO, ID_Localidade, NOME, ANOOBITO, SEXO, GRUPO_DCNT,
     Probabilidade_Incondicional, Probabilidade_2015, prob_esperada_meta
   )
+
+#Limpar anos sem dados do SIM
+ano_max_sim <- max(NUMERADOR_PROB$ANOOBITO, na.rm = TRUE)
+
+mestra_mortalidade <- mestra_mortalidade %>%
+  filter(ANOOBITO <= ano_max_sim)
+
+tabela_mestra_mortalidade <- tabela_mestra_mortalidade %>%
+  filter(ANOOBITO <= ano_max_sim)
+
+tabela_mestra_probabilidade <- tabela_mestra_probabilidade %>%
+  filter(ANOOBITO <= ano_max_sim)
+
+mestra_probabilidade <- mestra_probabilidade %>%
+  filter(ANOOBITO <= ano_max_sim)
 
 #Limpar memória
 manter <- c(
