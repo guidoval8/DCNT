@@ -565,7 +565,7 @@ mestra_mortalidade <- mestra_base_2015 %>%
 
 #Limpar memória
 manter <- c(
-  "SIM_filtrado", "pop_bruta_total", "RRAS_Municipios", "mestra_mortalidade", "tabela_mestra_mortalidade"
+  "SIM_filtrado", "pop_bruta_total", "RRAS_Municipios", "mestra_mortalidade", "tabela_mestra_mortalidade", "ano_max_sim"
 )
 
 rm(list = setdiff(ls(), manter))
@@ -1216,6 +1216,7 @@ geo_mun <- RRAS_Municipios %>%
   transmute(NIVEL_GEOGRAFICO = "Município", ID_LOCALIDADE = MUNIC_RES, NOME = MUNICIPIO) %>%
   distinct()
 
+
 geo_rs <- RRAS_Municipios %>%
   transmute(NIVEL_GEOGRAFICO = "Região de Saúde", ID_LOCALIDADE = NOME_RS_2025, NOME = NOME_RS_2025) %>%
   distinct() %>% filter(!is.na(ID_LOCALIDADE))
@@ -1234,7 +1235,10 @@ geo_estado <- data.frame(
 geo_completa <- bind_rows(geo_mun, geo_rs, geo_rras, geo_estado)
 
 #fixar último ano com dados
-ultimo_ano <- max(mestra_mortalidade$ANO, na.rm = TRUE)
+ano_max_sim <- max(mestra_mortalidade$ANO, na.rm = TRUE)
+ano_max_sih <- max(mestra_sih_dcnt$ANO, na.rm = TRUE)
+
+ultimo_ano <- max(ano_max_sim, ano_max_sih, na.rm = TRUE)
 
 anos_unicos <- 2015:ultimo_ano
 sexos_unicos <- c("Masculino", "Feminino", "Total")
@@ -1255,20 +1259,50 @@ esqueleto_bi <- expand_grid(
 #Limpar inconsistências lógicas do esqueleto
 esqueleto_bi <- esqueleto_bi %>%
   #Remover câncer de mama e colo de útero para homens ou 'Total'
-  filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino'))
-  #filter(!(GRUPO_DCNT %in% c('CSAP_HAS_DM', 'Hipertensao', 'DIC', 'AVC') & SEXO != 'Total'))
+  filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino')) %>%
+  filter(!(GRUPO_DCNT %in% c('CSAP_HAS_DM', 'Hipertensao', 'DIC', 'AVC', 'DIC_AVC') & SEXO != 'Total'))
 
 tabela_final_power_bi <- esqueleto_bi %>%
   left_join(mestra_mortalidade, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT")) %>%
   left_join(mestra_probabilidade, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT")) %>%
   left_join(mestra_sih_dcnt, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT"))
 
+metricas_sim <- c(
+  "OBITOS_SIM",
+  "POP_SIM",
+  "TAXA_PADRONIZADA",
+  "TAXA_PADRONIZADA_2015",
+  "TAXA_PADRONIZADA_ESPERADA_META",
+  "TAXA_BRUTA",
+  "TAXA_BRUTA_2015",
+  "TAXA_ESPERADA_META",
+  "PROBABILIDADE_INCONDICIONAL",
+  "PROBABILIDADE_2015",
+  "PROB_ESPERADA_META"
+)
+
+metricas_sih <- c(
+  "N_INTERNACOES",
+  "POP_SIH",
+  "TAXA_BRUTA_INTERNACAO",
+  "VALOR_TOTAL",
+  "VALOR_MEDIO",
+  "OBITOS_SIH",
+  "TAXA_MORTALIDADE"
+)
+
 #Transformar os NAs em 0 nas colunas de métricas
 tabela_final_power_bi <- tabela_final_power_bi %>%
-  mutate(across(
-    .cols = c(contains("TAXA"), contains("PROB"), contains("VALOR"), contains("OBITOS"), contains("POP"), "N_INTERNACOES", -TAXA_MORTALIDADE), 
-    .fns = ~replace_na(.x, 0)
-  )) %>% #Formatar o nome das DCNT
+  mutate(#Trata indicadores do SIM (se o ano no grid for > ano_max_sim, mantém NA)
+    across(
+      .cols = c(any_of(metricas_sim)),
+      .fns = ~ if_else(ANO <= ano_max_sim, replace_na(as.numeric(.x), 0), as.numeric(.x))
+    ),
+    across(#Trata indicadores do SIH (se o ano no grid for > ano_max_sih, mantém NA)
+      .cols = c(any_of(metricas_sih)),
+      .fns = ~ if_else(ANO <= ano_max_sih, replace_na(as.numeric(.x), 0), as.numeric(.x))
+    )
+  ) %>% #Formatar o nome das DCNT
   mutate(GRUPO_DCNT = case_when(
     GRUPO_DCNT == "Cancer" ~ "Câncer (C00-C97)",
     GRUPO_DCNT == "Cancer de Colo de Utero" ~ "Câncer de colo de útero (C53)",
