@@ -75,6 +75,22 @@ SIM_cancer_todos <- SIM_padrao %>%
   ) %>%
   filter(GRUPO_DCNT == 'Cancer')
 
+SIM_dic <- SIM_padrao %>%
+  mutate(
+    GRUPO_DCNT = case_when(
+      CID3 >= 'I20' & CID3 <= 'I25' ~ 'DIC'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == 'DIC')
+
+SIM_avc <- SIM_padrao %>%
+  mutate(
+    GRUPO_DCNT = case_when(
+      CID3 >= 'I60' & CID3 <= 'I69' ~ 'AVC'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == 'AVC')
+
 #Classificação que agrupa as DCNT
 SIM_todas <- SIM_padrao %>%
   mutate(
@@ -89,7 +105,7 @@ SIM_todas <- SIM_padrao %>%
   filter(!is.na(GRUPO_DCNT))
 
 #EMPILHAR AS CLASSIFICAÇÕES
-SIM_filtrado <- rbind(SIM_grupos, SIM_todas, SIM_cancer_todos)
+SIM_filtrado <- rbind(SIM_grupos, SIM_todas, SIM_cancer_todos, SIM_dic, SIM_avc)
 
 #CLASSIFICAÇÃO FAIXA ETÁRIA
 SIM_filtrado <- SIM_filtrado %>%
@@ -102,7 +118,8 @@ SIM_filtrado <- SIM_filtrado %>%
       TRUE ~ NA_character_
     )
   ) %>%
-  filter(!is.na(FAIXA_ETARIA))
+  filter(!is.na(FAIXA_ETARIA)) %>%
+  filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino'))
 
 #AGRUPAR NÚMERO DE ÓBITOS POR ESTRATO
 #Criando o estrato por sexo e ambos os sexos
@@ -118,8 +135,7 @@ NUMERADOR_SIM <- SIM_filtrado_final %>%
   summarise(
     obitos = n()
   ) %>%
-  ungroup() %>%
-  filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino'))
+  ungroup()
 
 #------------------------------#
 
@@ -230,6 +246,8 @@ grupo_dcnt_sim <- c(
   "Cancer de Mama",
   "Cancer do Aparelho Digestivo",
   "Circulatorio",
+  "AVC",
+  "DIC",
   "Diabetes",
   "Respiratoria",
   "Todas_DCNT"
@@ -762,9 +780,10 @@ regex_mama         <- "^C50"
 regex_colo         <- "^C53"
 regex_diabetes     <- "^E1[0-4]"
 regex_respiratoria <- "^(J3[0-57-9]|J[4-8][0-9]|J9[0-8])"
+regex_g45_g46      <- "^G4[56]"
 
 regex_dcnt_todas <- paste(regex_circulatorio, regex_digestivo, regex_mama, 
-                          regex_colo, regex_diabetes, regex_respiratoria, sep = "|")
+                          regex_colo, regex_diabetes, regex_respiratoria, regex_g45_g46, sep = "|")
 
 for (ano in anos) {
   ano_2_dig <- substr(as.character(ano), 3, 4)
@@ -910,24 +929,15 @@ sih_todas <- df_dcnt_final %>%
   ) %>%
   filter(!is.na(GRUPO_DCNT))
 
-#CSAP
+#Hipertensão
 sih_hipertensao <- df_dcnt_final %>%
   mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
   mutate(
     GRUPO_DCNT = case_when(
-      CID3 >= 'I10' & CID3 <= 'I14' ~ 'Hipertensao'
+      CID3 >= 'I10' & CID3 <= 'I11' ~ 'Hipertensao'
     )
   ) %>%
   filter(GRUPO_DCNT == 'Hipertensao')
-
-sih_csap_has_dm <- df_dcnt_final %>%
-  mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
-  mutate(
-    GRUPO_DCNT = case_when(
-      (CID3 >= 'I10' & CID3 <= 'I14') | (CID3 >= 'E10' & CID3 <= 'E14') ~ 'CSAP_HAS_DM'
-    )
-  ) %>%
-  filter(GRUPO_DCNT == 'CSAP_HAS_DM')
 
 # DIC - Doença Isquêmica do Coração
 sih_dic <- df_dcnt_final %>%
@@ -959,17 +969,63 @@ sih_dic_avc <- df_dcnt_final %>%
   ) %>%
   filter(GRUPO_DCNT == "DIC_AVC")
 
+# Angina (I20)
+sih_angina <- df_dcnt_final %>%
+  mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
+  mutate(
+    GRUPO_DCNT= case_when(
+      (CID3 == 'I20') ~ 'ANGINA'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == "ANGINA")
+
+# Insuficiência Cardíaca (I50)
+sih_insu_cardiaca <- df_dcnt_final %>%
+  mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
+  mutate(
+    GRUPO_DCNT= case_when(
+      (CID3 == 'I50') ~ 'INSU_CARDIACA'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == "INSU_CARDIACA")
+
+sih_avc_aps <- df_dcnt_final %>%
+  mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
+  mutate(
+    GRUPO_DCNT = case_when(
+      (CID3 >= 'I63' & CID3 <= 'I67') | CID3 == 'I69' | CID3 %in% c('G45', 'G46') ~ 'AVC_APS'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == "AVC_APS")
+
+sih_csap <- df_dcnt_final %>%
+  mutate(CID3 = substr(DIAG_PRINC, 1, 3)) %>%
+  mutate(
+    GRUPO_DCNT = case_when(
+      (CID3 >= 'I10' & CID3 <= 'I11') | 
+        (CID3 == 'I20') | 
+        (CID3 == 'I50') | 
+        (CID3 >= 'I63' & CID3 <= 'I67') | CID3 == 'I69' | CID3 %in% c('G45', 'G46') | 
+        (CID3 >= 'E10' & CID3 <= 'E14') ~ 'CSAP'
+    )
+  ) %>%
+  filter(GRUPO_DCNT == "CSAP")
+
 #EMPILHAR AS CLASSIFICAÇÕES
-sih <- rbind(sih_dcnt, sih_cancer_todos, sih_todas, sih_hipertensao, sih_csap_has_dm, sih_dic, sih_avc,sih_dic_avc)
+sih <- rbind(sih_dcnt, sih_cancer_todos, sih_todas, sih_hipertensao, sih_csap,
+             sih_dic, sih_avc, sih_dic_avc, sih_angina, sih_insu_cardiaca, sih_avc_aps)
 
 #limpando a RAM
 sih_dcnt <- NULL
 sih_cancer_todos <- NULL
 sih_todas <- NULL
 sih_hipertensao <- NULL
-sih_csap_has_dm <- NULL
 sih_dic <- NULL
 sih_avc <- NULL
+sih_angina <- NULL         
+sih_insu_cardiaca <- NULL  
+sih_avc_aps <- NULL
+sih_csap <- NULL
 
 gc()
 
@@ -1107,7 +1163,7 @@ tabela_mestra_valor <- rbind(valor_municipio, valor_rs, valor_rras, valor_estado
 #-------TAXA DE MORTALIDADE HOSPITALAR------------#
 #-------------------------------------------------#
 
-#Numerador: Número de óbitos que ocorreram em internações por DIC (CID-10 I20 a I25) ou por AVC (CID-10 I60 a I69) no período.
+#Numerador: Número de óbitos que ocorreram em internações
 #Denominador: Número de saídas do hospital (por alta, evasão, desistência do tratamento, transferência externa ou óbito) por DIC (CID-10 I20 a I25) ou por AVC (CID-10 I60 a I69), no mesmo período. O resultado é multiplicado por 100.
 
 # Município
@@ -1118,10 +1174,7 @@ mortalidade_municipio <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = case_when(
-    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
-    TRUE ~ NA_real_
-  )) %>%
+  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
   mutate(nivel_geografico = "Município") %>% rename(NOME = MUNICIPIO)
 
 # RS
@@ -1132,10 +1185,7 @@ mortalidade_rs <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = case_when(
-    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
-    TRUE ~ NA_real_
-  )) %>%
+  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
   mutate(nivel_geografico = "Região de Saúde") %>% rename(NOME = NOME_RS_2025)
 
 # RRAS
@@ -1146,10 +1196,7 @@ mortalidade_rras <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = case_when(
-    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
-    TRUE ~ NA_real_
-  )) %>%
+  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
   mutate(nivel_geografico = "RRAS") %>% rename(NOME = RRAS_2025)
 
 # Estado
@@ -1160,10 +1207,7 @@ mortalidade_estado <- sih_geo %>%
     obitos = sum(MORTE, na.rm = TRUE), 
     .groups = "drop"
   ) %>%
-  mutate(taxa_mortalidade = case_when(
-    GRUPO_DCNT == "DIC_AVC" ~ (obitos / n_internacoes) * 100,
-    TRUE ~ NA_real_
-  )) %>%
+  mutate(taxa_mortalidade = (obitos / n_internacoes) * 100) %>%
   mutate(nivel_geografico = "Estado de São Paulo") %>% mutate(NOME = "Estado de São Paulo")
 
 tabela_mestra_sih_mortalidade <- rbind(mortalidade_municipio, mortalidade_rs, mortalidade_rras, mortalidade_estado) %>%
@@ -1203,7 +1247,7 @@ mestra_probabilidade <- mestra_probabilidade %>%
 names(mestra_sih_dcnt) <- toupper(names(mestra_sih_dcnt))
 
 mestra_sih_dcnt <- mestra_sih_dcnt %>%
-  mutate(SEXO = "Total") %>%
+  mutate(SEXO = if_else(GRUPO_DCNT %in% c("Cancer de Mama", "Cancer de Colo de Utero"), "Feminino", "Total")) %>%
   rename(POP_SIH = POP)
 
 #------------#
@@ -1256,11 +1300,12 @@ esqueleto_bi <- expand_grid(
   GRUPO_DCNT = grupos_dcnt_unicos
 )
 
+
 #Limpar inconsistências lógicas do esqueleto
 esqueleto_bi <- esqueleto_bi %>%
   #Remover câncer de mama e colo de útero para homens ou 'Total'
   filter(!(GRUPO_DCNT %in% c('Cancer de Mama', 'Cancer de Colo de Utero') & SEXO != 'Feminino')) %>%
-  filter(!(GRUPO_DCNT %in% c('CSAP_HAS_DM', 'Hipertensao', 'DIC', 'AVC', 'DIC_AVC') & SEXO != 'Total'))
+  filter(!(GRUPO_DCNT %in% c('Hipertensao', 'DIC_AVC','ANGINA', 'INSU_CARDIACA', 'CSAP', 'AVC_APS') & SEXO != 'Total'))
 
 tabela_final_power_bi <- esqueleto_bi %>%
   left_join(mestra_mortalidade, by = c("NIVEL_GEOGRAFICO", "NOME", "ANO", "SEXO", "GRUPO_DCNT")) %>%
@@ -1312,11 +1357,14 @@ tabela_final_power_bi <- tabela_final_power_bi %>%
     GRUPO_DCNT == "Respiratoria" ~ "Doenças respiratórias crônicas (J30-J98)",
     GRUPO_DCNT == "Diabetes" ~ "Diabetes mellitus (E10-E14)",
     GRUPO_DCNT == "Hipertensao" ~ "Hipertensão arterial (I10-I14)",
-    GRUPO_DCNT == "CSAP_HAS_DM" ~ "Condições sensíveis à atenção primária em saúde",
     GRUPO_DCNT == "Todas_DCNT" ~ "Todas as DCNT",
     GRUPO_DCNT == "AVC" ~ "AVC (I60-I69)",
     GRUPO_DCNT == "DIC" ~ "DIC (I20-I25)",
     GRUPO_DCNT == "DIC_AVC" ~ "Mortalidade Hospitalar por DIC e AVC",
+    GRUPO_DCNT == "ANGINA" ~ "Angina (I20)",
+    GRUPO_DCNT == "INSU_CARDIACA" ~ "Insuficiência Cardíaca (I50)",
+    GRUPO_DCNT == "AVC_APS" ~ "AVC (I63-I67, I69, G45-G46)",
+    GRUPO_DCNT == "CSAP" ~ "Condições sensíveis à atenção primária em saúde",
     TRUE ~ GRUPO_DCNT
   ))
 
