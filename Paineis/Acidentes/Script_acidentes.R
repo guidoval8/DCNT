@@ -25,7 +25,7 @@ ano_atual <-  as.numeric(format(Sys.Date(), "%Y"))
 SIM <- fetch_datasus(year_start = 2015, year_end = ano_atual, uf = "SP", information_system = "SIM-DO")
 SIM <- process_sim(SIM)
 #----------------#
-
+SIM <- read_parquet('C:\\R\\DCNT\\Paineis\\Acidentes\\sim_acidentes.parquet')
 #----PADRONIZAÇÃO----#
 #CLASSIFICAR ANO
 SIM <- SIM %>%
@@ -48,7 +48,8 @@ SIM_BASE <- SIM_CID %>%
       IDADEanos >= 20 & IDADEanos < 30 ~ '20-29 anos',
       IDADEanos >= 30 & IDADEanos < 40 ~ '30-39 anos',
       IDADEanos >= 40 & IDADEanos < 60 ~ '40-59 anos',
-      IDADEanos >= 60 ~ '60 anos ou mais',
+      IDADEanos >= 60 & IDADEanos < 80 ~ '60-79 anos',
+      IDADEanos >= 80 ~ '80 anos ou mais',
       TRUE ~ NA_character_
     )
   ) %>%
@@ -75,7 +76,7 @@ SIM_transito_final <- bind_rows(SIM_transito_grupos, SIM_transito_todos)
 #QUEDAS
 SIM_quedas <- SIM_BASE %>%
   filter(CID3 >= 'W00' & CID3 <= 'W19') %>%
-  filter(FX == '60 anos ou mais') %>% 
+  filter(FX == '60-79 anos' | FX == '80 anos ou mais') %>% 
   mutate(
     AGRAVO = "Quedas",
     TIPO_VITIMA = "Todos os Tipos"
@@ -102,22 +103,64 @@ RRAS_RS <- RRAS_Municipios %>%
   select(COD_6_mun, MUNICIPIO, RRAS_2025, COD_RS_2025, NOME_RS_2025) %>%
   distinct(COD_6_mun, .keep_all = TRUE)
 
-df_geo <- SIM_CAUSAS_EXTERNAS %>%
-  mutate(CODMUNRES = str_sub(as.character(CODMUNRES), start = 1L, end = 6L)) %>%
-  left_join(RRAS_RS, by = c("CODMUNRES" = "COD_6_mun"))
+#Função para preparar e empilhar os totais
+preparar_agrupamentos <- function(df_base, col_mun) {
+  df_geo <- df_base %>%
+    mutate(COD_MUN_TEMP = str_sub(as.character(.data[[col_mun]]), start = 1L, end = 6L)) %>%
+    left_join(RRAS_RS, by = c("COD_MUN_TEMP" = "COD_6_mun"))
+  
+  df_sexo_total  <- df_geo %>% mutate(SEXO = "Total")
+  df_fx_total <- df_geo %>% filter(AGRAVO != "Quedas") %>% mutate(FX = "Total")
+  df_ambos_total <- df_geo %>% filter(AGRAVO != "Quedas") %>% mutate(SEXO = "Total", FX = "Total")
+  
+  bind_rows(df_geo, df_sexo_total, df_fx_total, df_ambos_total)
+}
 
-df_sexo_total  <- df_geo %>% mutate(SEXO = "Total")
+#Aplica para CODMUNRES e Ocorrência CODMUNOCOR
+agrupado_res <- preparar_agrupamentos(SIM_CAUSAS_EXTERNAS, "CODMUNRES")
+agrupado_ocor <- preparar_agrupamentos(SIM_CAUSAS_EXTERNAS, "CODMUNOCOR")
 
-df_fx_total <- df_geo %>% 
-  #Quedas não ganha FX="Total" para não estragar o denominador
-  filter(AGRAVO != "Quedas") %>% 
-  mutate(FX = "Total")
+#Função para agregar os óbitos nos diferentes níveis geográficos
+agregar_niveis <- function(df_agrupado, nome_coluna_obitos) {
+  mun <- df_agrupado %>%
+    group_by(ANOOBITO, MUNICIPIO, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
+    summarise(!!sym(nome_coluna_obitos) := n(), .groups = 'drop') %>%
+    rename(NOME = MUNICIPIO) %>% mutate(nivel_geografico = "Município")
+  
+  rs <- df_agrupado %>%
+    filter(!is.na(NOME_RS_2025)) %>%
+    group_by(ANOOBITO, NOME_RS_2025, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
+    summarise(!!sym(nome_coluna_obitos) := n(), .groups = 'drop') %>%
+    rename(NOME = NOME_RS_2025) %>% mutate(nivel_geografico = "RS")
+  
+  rras <- df_agrupado %>%
+    filter(!is.na(RRAS_2025)) %>%
+    group_by(ANOOBITO, RRAS_2025, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
+    summarise(!!sym(nome_coluna_obitos) := n(), .groups = 'drop') %>%
+    rename(NOME = RRAS_2025) %>% mutate(nivel_geografico = "RRAS")
+  
+  estado <- df_agrupado %>%
+    group_by(ANOOBITO, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
+    summarise(!!sym(nome_coluna_obitos) := n(), .groups = 'drop') %>%
+    mutate(NOME = "Estado SP", nivel_geografico = "Estado SP")
+  
+  bind_rows(mun, rs, rras, estado)
+}
 
-df_ambos_total <- df_geo %>% 
-  filter(AGRAVO != "Quedas") %>% 
-  mutate(SEXO = "Total", FX = "Total")
+#Executa a agregação para Residência e Ocorrência
+acidentes_res <- agregar_niveis(agrupado_res, "obitos_residencia")
+acidentes_ocor <- agregar_niveis(agrupado_ocor, "obitos_ocorrencia")
 
-acidentes_agrupar <- bind_rows(df_geo, df_sexo_total, df_fx_total, df_ambos_total)
+#Junta as duas bases
+acidentes_long <- full_join(
+  acidentes_res,
+  acidentes_ocor,
+  by = c("ANOOBITO", "NOME", "nivel_geografico", "SEXO", "FX", "AGRAVO", "TIPO_VITIMA")
+) %>%
+  mutate(
+    obitos_residencia = replace_na(obitos_residencia, 0),
+    obitos_ocorrencia = replace_na(obitos_ocorrencia, 0)
+  )
 
 #------------------------------#
 
@@ -163,6 +206,8 @@ for (ano in anos_baixar) {
 
 pop_bruta_total <- bind_rows(lista_pop_bruta)
 
+pop_bruta_total <- read_parquet('C:\\R\\DCNT\\Paineis\\Acidentes\\pop_bruta_total_acidentes.parquet')
+
 #CLASSIFICAÇÃO DE FAIXA ETÁRIA
 DENOMINADOR <- pop_bruta_total %>%
   mutate(IDADE = as.numeric(IDADE)) %>%
@@ -173,7 +218,8 @@ DENOMINADOR <- pop_bruta_total %>%
       IDADE >= 20 & IDADE < 30 ~ '20-29 anos',
       IDADE >= 30 & IDADE < 40 ~ '30-39 anos',
       IDADE >= 40 & IDADE < 60 ~ '40-59 anos',
-      IDADE >= 60 ~ '60 anos ou mais',
+      IDADE >= 60 & IDADE < 80 ~ '60-79 anos',
+      IDADE >= 80 ~ '80 anos ou mais',
       TRUE ~ NA_character_
     )
   ) %>%
@@ -248,35 +294,6 @@ pop_estado <- DENOMINADOR %>%
 
 pop <- bind_rows(pop_mun, pop_rs, pop_rras, pop_estado)
 
-#---TAXA DE MORTALIDADE---#
-#Município
-acidentes_mun <- acidentes_agrupar %>%
-  group_by(ANOOBITO, MUNICIPIO, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
-  summarise(obitos = n(), .groups = 'drop') %>%
-  rename(NOME = MUNICIPIO) %>% mutate(nivel_geografico = "Município")
-
-#RS
-acidentes_rs <- acidentes_agrupar %>%
-  filter(!is.na(NOME_RS_2025)) %>%
-  group_by(ANOOBITO, NOME_RS_2025, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
-  summarise(obitos = n(), .groups = 'drop') %>%
-  rename(NOME = NOME_RS_2025) %>% mutate(nivel_geografico = "RS")
-
-#RRAS
-acidentes_rras <- acidentes_agrupar %>%
-  filter(!is.na(RRAS_2025)) %>%
-  group_by(ANOOBITO, RRAS_2025, SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
-  summarise(obitos = n(), .groups = 'drop') %>%
-  rename(NOME = RRAS_2025) %>% mutate(nivel_geografico = "RRAS")
-
-#ESTADO
-acidentes_estado <- acidentes_agrupar %>%
-  group_by(ANOOBITO,  SEXO, FX, AGRAVO, TIPO_VITIMA) %>%
-  summarise(obitos = n(), .groups = 'drop') %>%
-  mutate(NOME = "Estado SP") %>% mutate(nivel_geografico = "Estado SP")
-
-acidentes_long <- bind_rows(acidentes_mun, acidentes_rs, acidentes_rras,acidentes_estado)
-
 #---Tabela mestra acidentes longa---#
 
 tipos_vitima <- c(
@@ -297,7 +314,7 @@ grid_transito <- expand_grid(
 grid_quedas <- expand_grid(
   AGRAVO = "Quedas",
   TIPO_VITIMA = "Todos os Tipos",
-  FX = "60 anos ou mais"
+  FX = c("60-79 anos", "80 anos ou mais")
 )
 
 #Empilhar o mapeamento
@@ -312,8 +329,10 @@ tabela_mestra_acidentes <- pop_expandida %>%
     by = c("ANOOBITO", "NOME", "nivel_geografico", "SEXO", "FX", "AGRAVO", "TIPO_VITIMA")
   ) %>%
   mutate(
-    obitos = replace_na(obitos, 0),
-    TAXA_MORTALIDADE_ACIDENTES = if_else(populacao > 0, (obitos / populacao) * 100000, 0)
+    obitos_residencia = replace_na(obitos_residencia, 0),
+    obitos_ocorrencia = replace_na(obitos_ocorrencia, 0),
+    TAXA_MORT_RESIDENCIA = if_else(populacao > 0, (obitos_residencia / populacao) * 100000, 0),
+    TAXA_MORT_OCORRENCIA = if_else(populacao > 0, (obitos_ocorrencia / populacao) * 100000, 0)
   )
 
 #----CÁLCULO DE METAS----#
@@ -322,7 +341,9 @@ tabela_mestra_acidentes <- pop_expandida %>%
 
 taxa_base_2015 <- tabela_mestra_acidentes %>%
   filter(ANOOBITO == 2015) %>%
-  select(nivel_geografico, NOME,  SEXO, FX , TIPO_VITIMA, AGRAVO, TAXA_MORTALIDADE_2015 = TAXA_MORTALIDADE_ACIDENTES)
+  select(nivel_geografico, NOME,  SEXO, FX , TIPO_VITIMA, AGRAVO, 
+         TAXA_2015_RES = TAXA_MORT_RESIDENCIA,
+         TAXA_2015_OCOR = TAXA_MORT_OCORRENCIA)
 
 mestra_base_2015 <- left_join(
   tabela_mestra_acidentes,
@@ -340,8 +361,9 @@ mestra_acidentes <- mestra_base_2015 %>%
     )
   ) %>%
   mutate(
-    TAXA_MORTALIDADE_ACIDENTES_META = TAXA_MORTALIDADE_2015 * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
-    ) %>%
+    TAXA_META_RES = TAXA_2015_RES * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015),
+    TAXA_META_OCOR = TAXA_2015_OCOR * (1 - TAXA_ANUAL_REDUCAO)^(ANOOBITO - 2015)
+  ) %>%
   filter(populacao != 0) %>%
   select(-TAXA_ANUAL_REDUCAO)
 
@@ -423,6 +445,8 @@ write.csv2(df_sih_bruto, "C:\\R\\DCNT\\Paineis\\Acidentes\\sih_causas_externas.c
 
 #df_sih_bruto <- read.csv2("C:\\R\\DCNT\\Paineis\\Acidentes\\sih_causas_externas.csv")
 
+df_sih_bruto <- read_parquet('C:\\R\\DCNT\\Paineis\\Acidentes\\sih_causas_externas.parquet')
+
 #----------------------#
 #---SIH - ACIDENTES----#
 #----------------------#
@@ -450,7 +474,8 @@ sih_base <- df_sih_bruto %>%
       IDADE >= 20 & IDADE < 30 ~ '20-29 anos',
       IDADE >= 30 & IDADE < 40 ~ '30-39 anos',
       IDADE >= 40 & IDADE < 60 ~ '40-59 anos',
-      IDADE >= 60 ~ '60 anos ou mais',
+      IDADE >= 60 & IDADE < 80 ~ '60-79 anos',
+      IDADE >= 80 ~ '80 anos ou mais',
       TRUE ~ NA_character_
     )
   ) %>%
@@ -477,7 +502,7 @@ sih_transito_final <- bind_rows(sih_transito, sih_transito_todos)
 #QUEDAS
 sih_quedas <- sih_base %>%
   filter(str_starts(CID_CAUSA, "W")) %>%
-  filter(FX == '60 anos ou mais') %>%
+  filter(FX %in% c('60-79 anos', '80 anos ou mais')) %>%
   mutate(
     AGRAVO = "Quedas",
     TIPO_VITIMA = "Todos os Tipos"
@@ -654,7 +679,7 @@ tabela_final_power_bi <- tabela_final_power_bi %>%
 #--------------------------------------------------#
 
 #DIMENSÃO ESPAÇO
-acidente_d_localidade <- tabela_final_power_bi %>%
+acidente_d_localidade <- geo_completa %>%
   select(nivel_geografico, ID_LOCALIDADE, NOME) %>%
   distinct() %>%
   mutate(ID_GEO = row_number())
@@ -689,11 +714,15 @@ fato_causas_externas <- tabela_final_power_bi %>%
     ID_AGRAVO, 
     ID_TEMPO, 
     ID_DEMOGRAFIA,
-    obitos_sim = obitos,
+    obitos_residencia_sim = obitos_residencia,
+    obitos_ocorrencia_sim = obitos_ocorrencia,
     populacao,
-    TAXA_MORTALIDADE_ACIDENTES,
-    TAXA_MORTALIDADE_2015,
-    TAXA_MORTALIDADE_ACIDENTES_META,
+    TAXA_MORTALIDADE_RESIDENCIA = TAXA_MORT_RESIDENCIA,
+    TAXA_MORTALIDADE_OCORRENCIA = TAXA_MORT_OCORRENCIA,
+    TAXA_MORTALIDADE_2015_RES = TAXA_2015_RES,
+    TAXA_MORTALIDADE_2015_OCOR = TAXA_2015_OCOR,
+    TAXA_MORTALIDADE_META_RES = TAXA_META_RES,
+    TAXA_MORTALIDADE_META_OCOR = TAXA_META_OCOR,
     n_internacoes,
     valor_total,
     obitos_sih,
@@ -707,10 +736,10 @@ fato_causas_externas <- tabela_final_power_bi %>%
 
 caminho_base <- "C:\\R\\DCNT\\Paineis\\Acidentes\\"
 
-write.csv2(acidente_d_localidade, paste0(caminho_base, "acidente_d_localidade_ext.csv"), row.names = FALSE)
-write.csv2(acidente_d_agravo, paste0(caminho_base, "acidente_d_agravo_ext.csv"), row.names = FALSE)
-write.csv2(acidente_d_demografia, paste0(caminho_base, "acidente_d_demografia_ext.csv"), row.names = FALSE)
-write.csv2(acidente_d_tempo, paste0(caminho_base, "acidente_d_tempo_ext.csv"), row.names = FALSE)
+write.csv2(acidente_d_localidade, paste0(caminho_base, "acidente_d_localidade.csv"), row.names = FALSE)
+write.csv2(acidente_d_agravo, paste0(caminho_base, "acidente_d_agravo.csv"), row.names = FALSE)
+write.csv2(acidente_d_demografia, paste0(caminho_base, "acidente_d_demografia.csv"), row.names = FALSE)
+write.csv2(acidente_d_tempo, paste0(caminho_base, "acidente_d_tempo.csv"), row.names = FALSE)
 write.csv2(fato_causas_externas, paste0(caminho_base, "acidente_f_indicadores.csv"), row.names = FALSE, na = "")
 
 write.xlsx(tabela_final_power_bi, paste0(caminho_base, "causas_externas.xlsx"))
