@@ -14,7 +14,7 @@ library(ggplot2)
 library(rmapshaper)
 library(read.dbc)
 library(purrr)
-library(arrow)
+library(nanoparquet)
 
 #BANCO NACIONAL
 #"ftp://ftp.datasus.gov.br/dissemin/publicos/SINAN/DADOS/FINAIS/VIOLBR23.dbc"
@@ -40,11 +40,11 @@ processar_dbc_ftp <- function(ano) {
   
   temp_file <- tempfile(fileext = ".dbc")
   
-  #tryCatch para evitar que o loop quebre caso a conexão falhe em um ano específico
+  #tryCatch para evitar que o loop quebre caso a conexão falhe em um ano
   message("Baixando e processando ano: ", ano, " - URL: ", url)
   
   resultado <- tryCatch({
-    #Fazer o download do arquivo binário (mode = "wb" é obrigatório para .dbc)
+    #Fazer o download do arquivo binário
     download.file(url, destfile = temp_file, mode = "wb", quiet = TRUE)
     
     df <- read.dbc(temp_file)
@@ -70,12 +70,19 @@ processar_dbc_ftp <- function(ano) {
 #Rodar o loop para todos os anos e empilhar em um único df
 df_final <- map_dfr(anos, processar_dbc_ftp)
 
+df_final <- read_parquet('C:/R/DCNT/Paineis/Violencia/Bancos/violencia_sinan.parquet')
+
 df_final$ANO_NASC <- as.character(df_final$ANO_NASC)
 df_final$ANO_NASC <- as.numeric(df_final$ANO_NASC)
 
 df_final <- df_final %>%
   mutate(
-    IDADE = (ANO - ANO_NASC),
+    ANO = year(DT_NOTIFIC),
+    IDADE = case_when(
+      str_sub(NU_IDADE_N, 1, 1) == "4" ~ as.numeric(str_sub(NU_IDADE_N, 2, 4)),
+      str_sub(NU_IDADE_N, 1, 1) %in% c("1", "2", "3") ~ 0,
+      TRUE ~ NA_real_
+    ),
     CS_RACA = case_when(
         CS_RACA == 1 ~ 'Branca',
         CS_RACA == 2 ~ 'Preta',
@@ -97,7 +104,7 @@ df_final <- df_final %>%
 #----------------------------------------#
 
 df_estupro <- df_final %>%
-  select("ANO", "ID_AGRAVO","IDADE", "DT_OCOR", "CS_SEXO", "CS_RACA","SG_UF_OCOR", "ID_MN_OCOR", "HORA_OCOR", "VIOL_SEXU", 
+  select("ANO", "ID_AGRAVO","IDADE","NU_IDADE_N", "DT_OCOR", "DT_NOTIFIC", "CS_SEXO", "CS_RACA","SG_UF_OCOR", "ID_MN_RESI", "HORA_OCOR", "VIOL_SEXU", 
          "SEX_ESTUPR", "PROC_DST", "PROC_HIV", "PROC_CONTR", "CLASSI_FIN", "DT_NOTIFIC", "ANO_NASC") %>%
   filter(as.character(SEX_ESTUPR) == "1") 
 
@@ -126,7 +133,7 @@ RRAS_RS <- RRAS_Municipios %>%
   select(COD_6_mun, MUNICIPIO, RRAS_2025, COD_RS_2025, NOME_RS_2025) %>%
   distinct(COD_6_mun, .keep_all = TRUE)
 
-estupro <- left_join(df_estupro, RRAS_RS, by = c("ID_MN_OCOR" = "COD_6_mun"))
+estupro <- left_join(df_estupro, RRAS_RS, by = c("ID_MN_RESI" = "COD_6_mun"))
 
 est_sexo_total <- estupro %>% mutate(CS_SEXO = "Total")
 est_fx_total   <- estupro %>% mutate(FX = "Total")
@@ -588,6 +595,8 @@ for (ano in anos_baixar) {
 
 pop_bruta_total <- bind_rows(lista_pop_bruta)
 
+pop_bruta_total <- read_parquet('C:/R/DCNT/Paineis/Violencia/Bancos/pop_bruta_violencia.parquet')
+
 #CLASSIFICAÇÃO DE FAIXA ETÁRIA
 DENOMINADOR <- pop_bruta_total %>%
   mutate(IDADE = as.numeric(IDADE)) %>%
@@ -671,33 +680,102 @@ pop_raca_final <- bind_rows(pop_raca_long, pop_raca_tot_raca) %>%
   rename(Populacao = pop) %>%
   mutate(Populacao = as.integer(Populacao))
 
+#------------------------------------------------------------#
+#---POPULAÇÃO GERAL ESTIMADA POR RAÇA (ESPECÍFICA ESTUPRO)---#
+#------------------------------------------------------------#
+
+DENOMINADOR_ESTUPRO <- pop_bruta_total %>%
+  mutate(IDADE = as.numeric(IDADE)) %>%
+  mutate(
+    FX = case_when(
+      IDADE <= 9 ~ "9 anos ou menos",
+      IDADE >= 10 & IDADE <= 14 ~ "10-14 anos",
+      IDADE >= 15 & IDADE <= 19 ~ "15-19 anos",
+      IDADE >= 20 & IDADE < 40 ~ "20-39 anos",
+      IDADE >= 40 & IDADE < 60 ~ "40-59 anos",
+      IDADE >= 60 ~ "60 anos ou mais",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(!is.na(FX)) %>%
+  mutate(
+    CODMUNRES = str_sub(as.character(COD_MUN), 1, 6),
+    ANO = as.double(as.character(ANO)),
+    CS_SEXO = case_when(
+      SEXO == "1" ~ "Masculino",
+      SEXO == "2" ~ "Feminino",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  filter(str_starts(CODMUNRES, "35"), !is.na(CS_SEXO)) %>%
+  group_by(CODMUNRES, ANO, CS_SEXO, FX) %>%
+  summarise(populacao = sum(POP, na.rm = TRUE), .groups = "drop")
+
+DENOMINADOR_ESTUPRO <- DENOMINADOR_ESTUPRO %>%
+  #Agrupa temporariamente para pegar o peso racial de "5-19 anos" da planilha 2022
+  mutate(FX_TEMP = if_else(FX %in% c("9 anos ou menos", "10-14 anos", "15-19 anos"), "5-19 anos", FX)) %>%
+  left_join(pop_raca_2022, by = c("CODMUNRES", "CS_SEXO", "FX_TEMP" = "FX")) %>%
+  mutate(pop_estimada = populacao * peso_raca) %>%
+  filter(!is.na(CS_RACA)) %>%
+  left_join(RRAS_RS, by = c("CODMUNRES" = "COD_6_mun")) %>%
+  select(-FX_TEMP)
+
+df_pop_est_sex_tot <- DENOMINADOR_ESTUPRO %>% mutate(CS_SEXO = "Total")
+df_pop_est_fx_tot  <- DENOMINADOR_ESTUPRO %>% mutate(FX = "Total")
+df_pop_est_ambos   <- DENOMINADOR_ESTUPRO %>% mutate(CS_SEXO = "Total", FX = "Total")
+
+pop_agrupar_estupro <- bind_rows(DENOMINADOR_ESTUPRO, df_pop_est_sex_tot, df_pop_est_fx_tot, df_pop_est_ambos)
+
+pop_estupro_mun <- pop_agrupar_estupro %>% 
+  group_by(ANO, MUNICIPIO, CS_SEXO, FX, CS_RACA) %>% 
+  summarise(pop = sum(pop_estimada, na.rm=TRUE), .groups="drop") %>% 
+  rename(NOME = MUNICIPIO) %>% mutate(nivel_geografico = "Município")
+
+pop_estupro_rs <- pop_agrupar_estupro %>% 
+  filter(!is.na(NOME_RS_2025)) %>% 
+  group_by(ANO, NOME_RS_2025, CS_SEXO, FX, CS_RACA) %>% 
+  summarise(pop = sum(pop_estimada, na.rm=TRUE), .groups="drop") %>% 
+  rename(NOME = NOME_RS_2025) %>% mutate(nivel_geografico = "RS")
+
+pop_estupro_rras <- pop_agrupar_estupro %>% 
+  filter(!is.na(RRAS_2025)) %>% 
+  group_by(ANO, RRAS_2025, CS_SEXO, FX, CS_RACA) %>% 
+  summarise(pop = sum(pop_estimada, na.rm=TRUE), .groups="drop") %>% 
+  rename(NOME = RRAS_2025) %>% mutate(nivel_geografico = "RRAS")
+
+pop_estupro_estado <- pop_agrupar_estupro %>% 
+  group_by(ANO, CS_SEXO, FX, CS_RACA) %>% 
+  summarise(pop = sum(pop_estimada, na.rm=TRUE), .groups="drop") %>% 
+  mutate(NOME = "Estado SP", nivel_geografico = "Estado SP")
+
+pop_estupro_long <- bind_rows(pop_estupro_mun, pop_estupro_rs, pop_estupro_rras, pop_estupro_estado)
+
+pop_estupro_tot_raca <- pop_estupro_long %>%
+  group_by(ANO, NOME, nivel_geografico, CS_SEXO, FX) %>%
+  summarise(pop = sum(pop, na.rm = TRUE), .groups = "drop") %>%
+  mutate(CS_RACA = "Total")
+
+pop_raca_final_estupro <- bind_rows(pop_estupro_long, pop_estupro_tot_raca) %>%
+  rename(Populacao = pop) %>%
+  mutate(Populacao = as.integer(Populacao))
+
+#-----------------------------------------#
+
 #Criar uma base auxiliar do Total de LAP para calcular a Proporção
 lap_totais_estrato <- lap_raca_final %>%
   filter(CS_RACA == "Total") %>%
   select(ANO, NOME, nivel_geografico, CS_SEXO, FX, MEIO_AGRESSAO, Total_LAP_Estrato = Notificacoes_LAP)
 
 tabela_mestra_lap_pbi <- lap_raca_final %>%
-  #Join com a População
-  left_join(pop_raca_final, by = c("ANO", "NOME", "nivel_geografico", "CS_SEXO", "FX", "CS_RACA")) %>%
-  #Join com o Total de LAP para o cálculo da proporção
   left_join(lap_totais_estrato, by = c("ANO", "NOME", "nivel_geografico", "CS_SEXO", "FX", "MEIO_AGRESSAO")) %>%
   mutate(
-    Populacao = replace_na(Populacao, 0),
     Total_LAP_Estrato = replace_na(Total_LAP_Estrato, 0),
-    
-    #Proporção de Notificações (%)
     Prop_LAP = if_else(Total_LAP_Estrato > 0, round((Notificacoes_LAP / Total_LAP_Estrato) * 100, 2), 0),
-    
-    #Taxa de Notificação por 100 mil habitantes
-    Taxa_Notificacao_LAP = if_else(Populacao > 0, (Notificacoes_LAP / Populacao) * 100000, 0),
-    
     TIPO_VIOLENCIA = "Lesão Autoprovocada"
   ) %>%
   select(-Total_LAP_Estrato)
 
-#Limpar memória (mantendo a pop_raca_final viva para usarmos no suicídio)
-manter <- c("df_final", "RRAS_RS", "tabela_mestra_estupro_pbi", "ano_atual", "tabela_mestra_lap_pbi", "pop_raca_final")
-
+manter <- c("df_final", "RRAS_RS", "tabela_mestra_estupro_pbi", "ano_atual", "tabela_mestra_lap_pbi", "pop_raca_final", "pop_raca_final_estupro")
 rm(list = setdiff(ls(), manter))
 gc()
 
@@ -709,7 +787,7 @@ gc()
 SIM <- fetch_datasus(year_start = 2016, year_end = ano_atual, uf = "SP", information_system = "SIM-DO")
 SIM <- process_sim(SIM)
 #----------------#
-
+SIM <- read_parquet('C:/R/DCNT/Paineis/Violencia/Bancos/SIM_violencia.parquet')
 #----PADRONIZAÇÃO----#
 #CLASSIFICAR ANO
 SIM <- SIM %>%
@@ -820,31 +898,21 @@ sui_raca_final <- bind_rows(sui_raca_long, sui_raca_tot_raca) %>%
 #---- TABELA MESTRA SUICÍDIO (CÁLCULOS NO FORMATO LONG) ----#
 
 tabela_mestra_suicidio_pbi <- sui_raca_final %>%
-  # Faz o Join com a pop_raca_final
-  left_join(pop_raca_final, by = c("ANO", "NOME", "nivel_geografico", "CS_SEXO", "FX", "CS_RACA")) %>%
-  mutate(
-    Populacao = replace_na(Populacao, 0),
-    
-    # Taxa Bruta Específica por 100 mil habitantes
-    Taxa_Mortalidade_Suicidio = if_else(Populacao > 0, (Obitos_Suicidio / Populacao) * 100000, 0),
-    
-    TIPO_VIOLENCIA = "Suicídio"
-  )
+  mutate(TIPO_VIOLENCIA = "Suicídio")
 
-# Limpar memória
-manter <- c(
-  "df_final", "RRAS_RS", "ano_atual", 
-  "tabela_mestra_estupro_pbi", "tabela_mestra_lap_pbi", "tabela_mestra_suicidio_pbi")
-
+#Limpar memória
+manter <- c("df_final", "RRAS_RS", "ano_atual", "tabela_mestra_estupro_pbi", "tabela_mestra_lap_pbi", "tabela_mestra_suicidio_pbi", "pop_raca_final", "pop_raca_final_estupro")
 rm(list = setdiff(ls(), manter))
 gc()
 
 #----------------------------------------#
 #-------------VIOLÊNCIAS MACRO-----------#
 #----------------------------------------#
+
 df_macro_prep <- df_final %>%
-  select(ANO, ID_MN_OCOR, CS_SEXO, CS_RACA, IDADE, 
-         VIOL_FISIC, VIOL_PSICO, VIOL_NEGLI, VIOL_SEXU, LES_AUTOP) %>%
+  select(ANO, ID_MN_RESI, CS_SEXO, CS_RACA, IDADE, 
+         VIOL_FISIC, VIOL_PSICO, VIOL_NEGLI, VIOL_SEXU, LES_AUTOP, 
+         VIOL_TORT, VIOL_TRAF, VIOL_FINAN, VIOL_INFAN, VIOL_LEGAL, VIOL_OUTR) %>%
   mutate(
     FX = case_when(
       IDADE <= 9 ~ "9 anos ou menos",
@@ -859,38 +927,47 @@ df_macro_prep <- df_final %>%
   filter(!is.na(FX))
 
 df_macro_tipos <- df_macro_prep %>%
+  mutate(across(c(VIOL_FISIC, VIOL_PSICO, VIOL_NEGLI, VIOL_SEXU, LES_AUTOP, 
+                  VIOL_TORT, VIOL_TRAF, VIOL_FINAN, VIOL_INFAN, VIOL_LEGAL, VIOL_OUTR), as.character)) %>%
   pivot_longer(
-    cols = c(VIOL_FISIC, VIOL_PSICO, VIOL_NEGLI, VIOL_SEXU, LES_AUTOP),
+    cols = c(VIOL_FISIC, VIOL_PSICO, VIOL_NEGLI, VIOL_SEXU, LES_AUTOP, 
+             VIOL_TORT, VIOL_TRAF, VIOL_FINAN, VIOL_INFAN, VIOL_LEGAL, VIOL_OUTR),
     names_to = "TIPO_MACRO",
     values_to = "OCORREU"
   ) %>%
-  filter(as.character(OCORREU) == "1") %>%
+  filter(OCORREU == "1") %>%
   mutate(
     TIPO_VIOLENCIA = case_when(
       TIPO_MACRO == "VIOL_FISIC" ~ 'Violência Física',
       TIPO_MACRO == "VIOL_PSICO" ~ 'Violência Psicológica',
-      TIPO_MACRO == "VIOL_NEGLI" ~ 'Violência Negligenciada',
-      TIPO_MACRO == "VIOL_SEXU" ~ 'Violência Sexual (Geral)',
-      TIPO_MACRO == "LES_AUTOP" ~ 'Lesão Autoprovocada (Geral)'
+      TIPO_MACRO == "VIOL_NEGLI" ~ 'Violência Negligência',
+      TIPO_MACRO == "VIOL_SEXU"  ~ 'Violência Sexual (Geral)',
+      TIPO_MACRO == "LES_AUTOP"  ~ 'Lesão Autoprovocada (Geral)',
+      TIPO_MACRO == "VIOL_TORT"  ~ 'Tortura',
+      TIPO_MACRO == "VIOL_TRAF"  ~ 'Tráfico de Seres Humanos',
+      TIPO_MACRO == "VIOL_FINAN" ~ 'Violência Financeira',
+      TIPO_MACRO == "VIOL_INFAN" ~ 'Trabalho Infantil',
+      TIPO_MACRO == "VIOL_LEGAL" ~ 'Intervenção Legal',
+      TIPO_MACRO == "VIOL_OUTR"  ~ 'Outras Violências'
     ),
     MEIO_AGRESSAO = "Não se aplica"
   ) %>%
   select(-TIPO_MACRO, -OCORREU)
 
 df_macro_total <- df_macro_prep %>%
-  #Filtra para garantir que a notificação teve ao menos uma das violências preenchidas como sim
-  filter(as.character(VIOL_FISIC) == "1" | as.character(VIOL_PSICO) == "1" | 
-           as.character(VIOL_NEGLI) == "1" | as.character(VIOL_SEXU) == "1" | as.character(LES_AUTOP) == "1") %>%
+  filter(if_any(c(VIOL_FISIC, VIOL_PSICO, VIOL_NEGLI, VIOL_SEXU, LES_AUTOP, 
+                  VIOL_TORT, VIOL_TRAF, VIOL_FINAN, VIOL_INFAN, VIOL_LEGAL, VIOL_OUTR), 
+                ~ as.character(.) == "1")) %>%
   mutate(
     TIPO_VIOLENCIA = "Total de Violências",
     MEIO_AGRESSAO = "Não se aplica"
   ) %>%
-  select(ANO, ID_MN_OCOR, CS_SEXO, CS_RACA, IDADE, FX, TIPO_VIOLENCIA, MEIO_AGRESSAO)
+  select(ANO, ID_MN_RESI, CS_SEXO, CS_RACA, IDADE, FX, TIPO_VIOLENCIA, MEIO_AGRESSAO)
 
 df_violencias_macro <- bind_rows(df_macro_tipos, df_macro_total)
 
-# Join Geográfico
-df_violencias_macro <- left_join(df_violencias_macro, RRAS_RS, by = c("ID_MN_OCOR" = "COD_6_mun"))
+#Join Geográfico
+df_violencias_macro <- left_join(df_violencias_macro, RRAS_RS, by = c("ID_MN_RESI" = "COD_6_mun"))
 
 #------------------------------------------------------#
 #---MUNICÍPIOS SILENCIOSOS (ZERO NOTIFICAÇÕES MACRO)---#
@@ -1031,13 +1108,34 @@ meios_unicos <- unique(tabela_mestra_todas$MEIO_AGRESSAO) %>% na.omit()
 
 tipos_violencia <- c(
   "Violência Sexual", "Lesão Autoprovocada", "Suicídio",
-  "Violência Física", "Violência Psicológica", "Violência Negligenciada",
-  "Violência Sexual (Geral)", "Lesão Autoprovocada (Geral)", "Total de Violências"
+  "Violência Física", "Violência Psicológica", "Violência Negligência",
+  "Violência Sexual (Geral)", "Lesão Autoprovocada (Geral)", 
+  "Tortura", "Tráfico de Seres Humanos", "Violência Financeira", 
+  "Trabalho Infantil", "Intervenção Legal", "Outras Violências",
+  "Total de Violências"
 )
+
 tipos_macro_e_estupro <- c(
   "Violência Sexual", "Violência Física", "Violência Psicológica", 
-  "Violência Negligenciada", "Violência Sexual (Geral)", "Lesão Autoprovocada (Geral)", "Total de Violências"
+  "Violência Negligência", "Violência Sexual (Geral)", "Lesão Autoprovocada (Geral)", 
+  "Tortura", "Tráfico de Seres Humanos", "Violência Financeira", 
+  "Trabalho Infantil", "Intervenção Legal", "Outras Violências",
+  "Total de Violências"
 )
+
+manter_para_grid <- c(
+  "geo_completa", "anos_unicos", "sexos_unicos", "faixas_unicas", "racas_unicas", "meios_unicos",
+  "tipos_violencia", "tipos_macro_e_estupro", 
+  "tabela_mestra_todas", "ind_silencioso_final",
+  "tabela_mestra_estupro_pbi", "tabela_mestra_lap_pbi", "tabela_mestra_suicidio_pbi",
+  "pop_raca_final", "pop_raca_final_estupro" 
+)
+rm(list = setdiff(ls(), manter_para_grid))
+gc()
+
+#------------------------------------------------------#
+#------------------------------------------------------#
+#------------------------------------------------------#
 
 #Criando a Grid Completa
 esqueleto_violencia <- expand_grid(
@@ -1049,7 +1147,7 @@ esqueleto_violencia <- expand_grid(
   TIPO_VIOLENCIA = tipos_violencia,
   MEIO_AGRESSAO = meios_unicos
 ) %>%
-  # MEIO DE AGRESSÃO AGORA DEVE EXISTIR TANTO PARA LAP QUANTO PARA SUICÍDIO
+  #MEIO DE AGRESSÃO AGORA DEVE EXISTIR TANTO PARA LAP QUANTO PARA SUICÍDIO
   filter(
     (TIPO_VIOLENCIA %in% c("Lesão Autoprovocada", "Suicídio") & MEIO_AGRESSAO != "Não se aplica") |
       (TIPO_VIOLENCIA %in% tipos_macro_e_estupro & MEIO_AGRESSAO == "Não se aplica")
@@ -1069,10 +1167,29 @@ tabela_final_power_bi <- esqueleto_violencia %>%
   ) %>%
   #Municipio silencioso
   left_join(ind_silencioso_final, by = c("ANO", "NOME", "nivel_geografico")) %>%
+  
+  #Acopla as duas bases de População (Padrão e Estupro)
+  left_join(pop_raca_final %>% select(ANO, NOME, nivel_geografico, CS_SEXO, FX, CS_RACA, Pop_Padrao = Populacao), 
+            by = c("ANO", "NOME", "nivel_geografico", "CS_SEXO", "FX", "CS_RACA")) %>%
+  left_join(pop_raca_final_estupro %>% select(ANO, NOME, nivel_geografico, CS_SEXO, FX, CS_RACA, Pop_Estupro = Populacao), 
+            by = c("ANO", "NOME", "nivel_geografico", "CS_SEXO", "FX", "CS_RACA")) %>%
+  mutate(
+    #A linha puxa a População correta com base no Tipo de Violência
+    Populacao = if_else(TIPO_VIOLENCIA %in% tipos_macro_e_estupro, Pop_Estupro, Pop_Padrao)
+  ) %>%
   mutate(across(where(is.numeric), ~replace_na(.x, 0))) %>%
-  #Mantém o indicador de Silencioso para os tipos Macro, ocultando apenas em bases de fontes distintas (SIM)
-  mutate(Prop_Mun_Silenciosos = if_else(TIPO_VIOLENCIA %in% tipos_macro_e_estupro, Prop_Mun_Silenciosos, NA_real_)) %>%
-  filter(MEIO_AGRESSAO != "Ameaça" & MEIO_AGRESSAO != "Força Corporal/Espancamento")
+  
+  #Cálculos de Taxa
+  mutate(
+    Taxa_Notificacao_Estupro = if_else(TIPO_VIOLENCIA == "Violência Sexual" & Populacao > 0, (Notificacoes_Estupro / Populacao) * 100000, 0),
+    Taxa_Notificacao_LAP = if_else(TIPO_VIOLENCIA == "Lesão Autoprovocada" & Populacao > 0, (Notificacoes_LAP / Populacao) * 100000, 0),
+    Taxa_Mortalidade_Suicidio = if_else(TIPO_VIOLENCIA == "Suicídio" & Populacao > 0, (Obitos_Suicidio / Populacao) * 100000, 0),
+    
+    #Mantém o indicador de Silencioso para os tipos Macro
+    Prop_Mun_Silenciosos = if_else(TIPO_VIOLENCIA %in% tipos_macro_e_estupro, Prop_Mun_Silenciosos, NA_real_)
+  ) %>%
+  filter(MEIO_AGRESSAO != "Ameaça" & MEIO_AGRESSAO != "Força Corporal/Espancamento") %>%
+  select(-Pop_Padrao, -Pop_Estupro)
 
 #-----------------#
 #---STAR SCHEMA---#
@@ -1130,6 +1247,7 @@ viol_f_indicadores <- tabela_final_power_bi %>%
     
     #Estupro
     Notificacoes_Estupro,
+    Taxa_Notificacao_Estupro,
     Oportunidade_72h,
     total_72h,
     PEP_72h,
@@ -1159,7 +1277,7 @@ write.csv2(viol_d_localidade, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_d_localidad
 write.csv2(viol_d_agravo, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_d_agravo.csv", row.names = FALSE)
 write.csv2(viol_d_tempo, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_d_tempo.csv", row.names = FALSE)
 write.csv2(viol_d_demografia, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_d_demografia.csv", row.names = FALSE)
-write.csv2(viol_f_indicadores, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_f_indicadores.csv", row.names = FALSE, na ="")
+write.csv2(viol_f_indicadores, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_f_indicadores.csv", row.names = FALSE, na = '')
 
 #-------------FIM------------#
 #-------------FIM------------#
@@ -1168,6 +1286,59 @@ write.csv2(viol_f_indicadores, "C:\\R\\DCNT\\Paineis\\Violencia\\viol_f_indicado
 #-------------FIM------------#
 #-------------FIM------------#
 #-------------FIM------------#
+
+library(gert)
+
+#Configurações Iniciais
+git_config_global_set("user.name", "guidoval8")
+git_config_global_set("user.email", "guidoval8@exemplo.com")
+
+caminho_repo <- "C:/R/DCNT/DANT_r"
+caminho_do_meu_arquivo <- "C:/R/DCNT/Paineis/Acidentes/Acidentes.pbix"
+
+#Clona apenas se a pasta do repositório ainda não existir
+if (!dir.exists(caminho_repo)) {
+  git_clone("https://github.com/DANT-c/DANT_r.git", path = caminho_repo)
+}
+
+#Caminho de destino exato DENTRO do repositório
+pasta_destino <- file.path(caminho_repo, "Paineis", "Acidentes")
+arquivo_destino <- file.path(pasta_destino, "Acidentes.pbix")
+
+#Garante que a pasta destino existe no repositório clonado
+dir.create(pasta_destino, recursive = TRUE, showWarnings = FALSE)
+
+#Copia o arquivo
+copia_ok <- file.copy(
+  from = caminho_do_meu_arquivo, 
+  to = arquivo_destino, 
+  overwrite = TRUE
+)
+
+#Operações do Git travadas no repositório correto (usando repo = caminho_repo)
+if (copia_ok && file.exists(arquivo_destino)) {
+  message("✅ Arquivo copiado fisicamente para o repositório!")
+  
+  #Adiciona o arquivo dizendo ao Git exatamente de qual repositório estamos falando
+  git_add("Paineis/Acidentes/Acidentes.pbix", repo = caminho_repo, force = TRUE)
+  
+  # Verifica o status no repositório correto
+  status <- git_status(repo = caminho_repo)
+  message("🔍 Status atual do Git:")
+  print(status)
+  
+  # Se o status indicar que há arquivos 'staged' (preparados)
+  if (any(status$staged)) {
+    git_commit("Adiciona novo painel", repo = caminho_repo)
+    git_push(repo = caminho_repo)
+    message("🚀 Upload concluído com sucesso!")
+  } else {
+    message("⚠️ O Git não enviou porque o arquivo copiado é idêntico ao que já está no GitHub.")
+  }
+  
+} else {
+  message("❌ A CÓPIA FALHOU. Verifique se o arquivo original existe.")
+}
 
 #---------------------------#
 #---PLANILHA DE VALIDAÇÃO---#
@@ -1179,10 +1350,10 @@ validacao_estupro_geral <- tabela_final_power_bi %>%
   filter(CS_SEXO == "Total", FX == "Total", CS_RACA == "Total") %>%
   select(
     nivel_geografico, NOME, TIPO_VIOLENCIA, MEIO_AGRESSAO, ANO,
-    Notificacoes_Estupro, Oportunidade_72h, PEP_72h, Prop_Mun_Silenciosos
+    Notificacoes_Estupro, Taxa_Notificacao_Estupro, Oportunidade_72h, PEP_72h, Prop_Mun_Silenciosos
   ) %>%
   pivot_longer(
-    cols = c(Notificacoes_Estupro, Oportunidade_72h, PEP_72h, Prop_Mun_Silenciosos),
+    cols = c(Notificacoes_Estupro, Taxa_Notificacao_Estupro, Oportunidade_72h, PEP_72h, Prop_Mun_Silenciosos),
     names_to = "INDICADOR",
     values_to = "VALOR"
   )
